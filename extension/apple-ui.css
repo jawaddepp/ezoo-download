@@ -61,11 +61,15 @@ output { font-variant-numeric: tabular-nums; }
 [hidden] { display: none !important; }
 
 /* Browser popup: one compact downloads surface. */
-.popup { width: 392px; max-width: 100vw; }
+/* Give extension popups a definite intrinsic width: a viewport cap here can
+   lock Chrome to its initial narrow viewport before it has sized the popup. */
+html.popup-document { width: 392px; }
+.popup { width: 100%; min-width: 0; }
 .popup-header { display: flex; align-items: center; gap: 11px; padding: 18px 16px 16px; }
 .popup-header h1 { font-size: 17px; line-height: 1.25; font-weight: 600; letter-spacing: -.3px; margin: 0; }
 .popup-header p { margin: 2px 0 0; color: var(--secondary-label); font-size: 12px; }
-.popup-header .icon-button { margin-left: auto; }
+.popup-header > div:not(.brand-mark) { flex: 1; min-width: 0; }
+.popup-header .icon-button { margin-left: auto; flex: none; }
 .popup-content { padding: 0 16px; }
 .integration-row { display: flex; align-items: center; gap: 12px; padding: 11px 12px; }
 .integration-copy { flex: 1; min-width: 0; }
@@ -75,13 +79,13 @@ output { font-variant-numeric: tabular-nums; }
 .section-heading h2 { margin: 0; font-size: 13px; font-weight: 600; }
 .item-count { margin-left: auto; color: var(--secondary-label); font-size: 12px; }
 .media-list { max-height: 312px; overflow-y: auto; overscroll-behavior: contain; }
-.media-row { display: flex; align-items: center; gap: 10px; min-height: 66px; padding: 11px 12px; }
+.media-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-height: 66px; padding: 11px 12px; }
 .media-row + .media-row { border-top: 1px solid var(--separator); }
 .media-symbol { display: grid; place-items: center; width: 30px; height: 32px; color: var(--accent-ink); flex: none; }
-.media-info { flex: 1; min-width: 0; }
+.media-info { flex: 1 1 110px; min-width: 0; }
 .media-title { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .media-info small { display: block; margin-top: 2px; color: var(--secondary-label); font-size: 12px; overflow-wrap: anywhere; }
-.download-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; padding: 6px 8px; border: 0; background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
+.download-button { margin-left: auto; display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; padding: 6px 8px; border: 0; background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .download-button svg { width: 18px; height: 18px; }
 .download-button:hover:not(:disabled) { background: var(--button-fill); color: var(--button-label); }
 .download-button:active:not(:disabled) { filter: brightness(.9); }
@@ -111,11 +115,30 @@ output { font-variant-numeric: tabular-nums; }
 .connection.on::before { background: var(--success); }
 .connection.offline { color: var(--warning); }
 .connection.offline::before { background: var(--warning); }
-.footer-row { display: flex; align-items: center; gap: 12px; }
+.footer-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .footer-row .button-link { margin-left: auto; font-size: 12px; }
 .footer-row .button-link svg { width: 18px; height: 18px; }
 .button-link.secondary-action { color: var(--accent-ink); background: var(--accent-soft); }
 .connection-hint { color: var(--secondary-label); font-size: 12px; margin: 9px 0 0; }
+
+/* If a browser or narrow display constrains the popup, keep format text and
+   actions readable instead of shrinking the label down to individual letters. */
+@media (max-width: 300px) {
+  .popup-header { gap: 8px; padding: 14px 10px 12px; }
+  .popup-header .brand-mark { width: 28px; height: 28px; }
+  .popup-header h1 { font-size: 14px; }
+  .popup-header .icon-button { width: 28px; }
+  .popup-content { padding: 0 10px; }
+  .integration-row { gap: 8px; padding: 10px; }
+  .section-heading { gap: 6px; }
+  .section-heading h2, .item-count { white-space: nowrap; }
+  .media-row { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 6px 8px; padding: 10px; }
+  .media-symbol { width: 20px; height: 24px; }
+  .media-info { min-width: 0; }
+  .download-button { grid-column: 2; justify-self: start; margin-left: 0; }
+  .media-notice .media-info { grid-column: 2; }
+  .popup-footer { padding: 8px 10px 14px; }
+}
 
 /* Options: grouped settings with advanced connection disclosure. */
 .options-page { min-width: 360px; }
