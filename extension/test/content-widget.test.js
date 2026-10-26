@@ -6,8 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
 
-function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true } = {}) {
+function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true, topFrame = true, topFullscreen = false, topAvailable = true, deferFullscreen = false } = {}) {
   const events = new Map(), intervals = new Map(), timeouts = [], frames = [], messages = [], storageListeners = [], runtimeListeners = [];
+  const pendingFullscreen = [];
+  let reportedTopFullscreen = topFullscreen, reportedTopAvailable = topAvailable;
   let document;
   const addGlobal = (type, fn) => { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); };
   const emitGlobal = (type, e = {}) => { for (const fn of [...(events.get(type) || [])]) fn(event(e)); };
@@ -79,10 +81,17 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
   const chrome = {
     storage: { local: { get(defaults, cb) { cb(defaults); } }, onChanged: { addListener(fn) { storageListeners.push(fn); } } },
     runtime: {
+      id: 'synthetic-extension',
       lastError: null,
       onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
       sendMessage(message, cb) {
         messages.push(message);
+        if (message.type === 'swiftget-query-top-fullscreen') {
+          const answer = reportedTopAvailable ? { fullscreen: reportedTopFullscreen } : {};
+          if (deferFullscreen) pendingFullscreen.push(() => cb?.(answer));
+          else cb?.(answer);
+          return Promise.resolve(answer);
+        }
         const response = message.type === 'swiftget-config' ? { enabled: true, skipSites: [] }
           : message.type === 'swiftget-media-request' ? items
           : message.type === 'swiftget-resolve-video' ? { items }
@@ -99,12 +108,16 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
     clearInterval(fn) { for (const [ms, list] of intervals) intervals.set(ms, list.filter(f => f !== fn)); },
     getSelection() { return null; },
   };
-  ctx.window = ctx; ctx.top = ctx;
+  ctx.window = ctx; ctx.top = topFrame ? ctx : {};
   vm.runInNewContext(source, ctx, { filename: 'content.js' });
   const hosts = () => document.documentElement.children.filter(x => x._shadow);
   const root = () => hosts()[0]?._shadow;
   return { ctx, video, document, messages, events, root, hosts,
-    send(message) { for (const fn of runtimeListeners) fn(message, {}, () => {}); },
+    send(message, sender = {}, reply = () => {}) { for (const fn of runtimeListeners) fn(message, sender, reply); },
+    setTopFullscreen(value) { reportedTopFullscreen = value; },
+    setTopAvailable(value) { reportedTopAvailable = value; },
+    resolveFullscreen(index) { pendingFullscreen[index](); },
+    pendingFullscreen() { return pendingFullscreen.length; },
     change(change) { for (const fn of storageListeners) fn(change, 'local'); },
     tick(ms) { for (const fn of intervals.get(ms) || []) fn(); },
     flush() { while (timeouts.length) timeouts.shift()(); },
@@ -193,6 +206,79 @@ function formats() {
   f.document.fullscreenElement = null; f.global('resize'); assert.equal(host.style.display, 'block', 'exiting fullscreen restores the control');
   f.ctx.innerWidth = 32;
   f.global('resize'); assert.equal(host.style.display, 'none', 'very tiny viewports do not expose an offscreen control');
+}
+{
+  const f = fixture({ topFrame: false, topFullscreen: true });
+  f.send({ type: 'swiftget-open-panel' });
+  const host = f.hosts()[0];
+  assert(host, 'embedded player has its own widget');
+  assert.equal(host.style.display, 'none', 'a child initialized during parent fullscreen stays hidden');
+  f.setTopFullscreen(false);
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  assert.equal(host.style.display, 'block', 'parent fullscreen exit restores the child widget');
+  const before = f.messages.filter((m) => m.type === 'swiftget-query-top-fullscreen').length;
+  f.setTopFullscreen(true);
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'foreign-extension' });
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension', tab: { id: 7 } });
+  assert.equal(f.messages.filter((m) => m.type === 'swiftget-query-top-fullscreen').length, before, 'untrusted or content-script signals are ignored');
+  assert.equal(host.style.display, 'block');
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  assert.equal(host.style.display, 'none', 'a trusted parent fullscreen signal hides the child');
+}
+{
+  const f = fixture({ topFrame: false, topFullscreen: false, deferFullscreen: true });
+  f.send({ type: 'swiftget-open-panel' }); const host = f.hosts()[0];
+  assert.equal(f.pendingFullscreen(), 1, 'a new child requests initial top-frame state');
+  assert.equal(host.style.display, 'none', 'the child does not flash before the initial query returns');
+  f.setTopFullscreen(true);
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  assert.equal(f.pendingFullscreen(), 2);
+  f.resolveFullscreen(1);
+  assert.equal(host.style.display, 'none');
+  f.resolveFullscreen(0);
+  assert.equal(host.style.display, 'none', 'an older async query cannot undo a newer fullscreen result');
+  const nextPage = fixture({ topFrame: false, topFullscreen: false });
+  nextPage.send({ type: 'swiftget-open-panel' });
+  assert.equal(nextPage.hosts()[0].style.display, 'block', 'a new page uses fresh top-frame state');
+}
+{
+  const f = fixture({ topFrame: false, topFullscreen: true, topAvailable: false });
+  f.send({ type: 'swiftget-open-panel' }); const host = f.hosts()[0];
+  assert.equal(host.style.display, 'none', 'an early child waits rather than flashing when its top script is not ready');
+  f.setTopAvailable(true);
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  f.flush();
+  assert.equal(host.style.display, 'none', 'top startup state wins over the older unavailable-query fallback');
+  f.setTopFullscreen(false);
+  f.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  assert.equal(host.style.display, 'block', 'the child returns after the parent exits fullscreen');
+  const unavailable = fixture({ topFrame: false, topAvailable: false });
+  unavailable.send({ type: 'swiftget-open-panel' });
+  assert.equal(unavailable.hosts()[0].style.display, 'none');
+  unavailable.flush();
+  assert.equal(unavailable.hosts()[0].style.display, 'none', 'unknown top-frame state fails closed after bounded retries');
+  assert.equal(unavailable.messages.filter((m) => m.type === 'swiftget-query-top-fullscreen').length, 3, 'unavailable state does not create recurring polling');
+  unavailable.setTopAvailable(true);
+  unavailable.send({ type: 'swiftget-open-panel' }, { id: 'foreign-extension' });
+  assert.equal(unavailable.hosts()[0].style.display, 'none', 'an untrusted open cannot trigger recovery');
+  unavailable.send({ type: 'swiftget-open-panel' }, { id: 'synthetic-extension' });
+  assert.equal(unavailable.hosts()[0].style.display, 'block', 'explicit authenticated open recovers after worker availability returns');
+  unavailable.setTopFullscreen(true);
+  unavailable.send({ type: 'swiftget-refresh-top-fullscreen' }, { id: 'synthetic-extension' });
+  unavailable.send({ type: 'swiftget-open-panel' }, { id: 'synthetic-extension' });
+  assert.equal(unavailable.hosts()[0].style.display, 'none', 'explicit open cannot reveal a fullscreen embedded player');
+}
+{
+  const f = fixture(); let result;
+  assert(f.messages.some((m) => m.type === 'swiftget-top-fullscreen-changed'), 'a new top frame announces its current state to early children');
+  f.document.fullscreenElement = f.document.documentElement;
+  f.send({ type: 'swiftget-read-top-fullscreen' }, { id: 'synthetic-extension' }, (r) => { result = r; });
+  assert.equal(result.fullscreen, true, 'background can query the top frame');
+  result = undefined;
+  f.send({ type: 'swiftget-read-top-fullscreen' }, { id: 'foreign-extension' }, (r) => { result = r; });
+  assert.equal(result, undefined, 'foreign top-frame state queries are ignored');
+  f.document.emit('fullscreenchange');
+  assert(f.messages.some((m) => m.type === 'swiftget-top-fullscreen-changed'), 'the top frame notifies the worker on transitions');
 }
 {
   const f = fixture(), host = f.hosts()[0];

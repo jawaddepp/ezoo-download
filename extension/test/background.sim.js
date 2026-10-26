@@ -8,6 +8,7 @@ const canceled = []; const erased = []; const dataRequests = [];
 let runtimeOrigin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 let runtimeVersion = "1.0.4";
 const readiness = [];
+const fullscreenTrace = []; let topFullscreen = false; let topFullscreenUnavailable = false;
 let preparedConfig;
 let preparedConfigReads = 0;
 const chrome = {
@@ -23,9 +24,17 @@ const chrome = {
   downloads: { onCreated: on("dl"), cancel: async (id) => canceled.push(id), erase: async (query) => erased.push(query.id), download: (o) => browserDl.push(o.url) },
   webRequest: { onHeadersReceived: on("headers"), onBeforeRequest: on("before") },
   tabs: { onUpdated: on("upd"), onRemoved: on("rm"), get: async (id) => ({ id, url: tabUrl }), query: async () => [{ id: 7 }],
-          sendMessage: async (id, m) => tabMsgs.push(m) },
+          sendMessage: async (id, m, options) => {
+            if (m.type === 'swiftget-read-top-fullscreen') {
+              fullscreenTrace.push({ id, type: m.type, options });
+              if (topFullscreenUnavailable) throw new Error('top frame unavailable');
+              return { fullscreen: topFullscreen };
+            }
+            if (m.type === 'swiftget-refresh-top-fullscreen') { fullscreenTrace.push({ id, type: m.type, options }); return; }
+            return tabMsgs.push(m);
+          } },
   action: { setBadgeBackgroundColor: () => {}, setBadgeText: async () => {} },
-  runtime: { onInstalled: on("inst"), onStartup: on("start"), onMessage: on("msg"), getManifest: () => ({ version: runtimeVersion }), getURL: (part) => `${runtimeOrigin}/${part}`, reload: () => { reloads++; } },
+  runtime: { id: 'synthetic-extension', onInstalled: on("inst"), onStartup: on("start"), onMessage: on("msg"), getManifest: () => ({ version: runtimeVersion }), getURL: (part) => `${runtimeOrigin}/${part}`, reload: () => { reloads++; } },
   contextMenus: { removeAll: () => {}, create: () => {}, onClicked: on("ctx") },
   cookies: { getAll: async () => [] },
 };
@@ -33,7 +42,7 @@ const ytCalls = []; const browserDl = []; let appDown = false;
 const batches = []; const cookieQueries = []; let collectedLinks = null;
 chrome.cookies.getAll = async ({ url }) => { cookieQueries.push(url); return [{ name: "session", value: "synthetic" }]; };
 const originalTabMessage = chrome.tabs.sendMessage;
-chrome.tabs.sendMessage = async (id, message) => message.type === "swiftget-collect-links" ? collectedLinks : originalTabMessage(id, message);
+chrome.tabs.sendMessage = async (id, message, options) => message.type === "swiftget-collect-links" ? collectedLinks : originalTabMessage(id, message, options);
 const fetch = async (url, opts = {}) => {
   if (/\/(add|resolve|playlist|links)$/.test(url)) dataRequests.push(url);
   if (url.endsWith("/app-connection.json")) {
@@ -67,6 +76,35 @@ const gv = (itag, mime, clen, dur, r) => `https://rr1---sn-x.googlevideo.com/vid
 const tick = () => new Promise((r) => setTimeout(r, 20));
 
 (async () => {
+  {
+    const top = { id: 'synthetic-extension', tab: { id: 41 }, frameId: 0 };
+    const child = { id: 'synthetic-extension', tab: { id: 41 }, frameId: 3 };
+    const otherTab = { id: 'synthetic-extension', tab: { id: 42 }, frameId: 9 };
+    listeners.msg({ type: 'swiftget-top-fullscreen-changed' }, top, () => {});
+    await tick();
+    assert(fullscreenTrace.some((m) => m.id === 41 && m.type === 'swiftget-refresh-top-fullscreen'), 'top frame broadcasts only to its own tab');
+    const before = fullscreenTrace.length;
+    listeners.msg({ type: 'swiftget-top-fullscreen-changed' }, child, () => {});
+    listeners.msg({ type: 'swiftget-top-fullscreen-changed' }, { ...top, id: 'other-extension' }, () => {});
+    listeners.msg({ type: 'swiftget-top-fullscreen-changed' }, { id: 'synthetic-extension', frameId: 0 }, () => {});
+    assert.strictEqual(fullscreenTrace.length, before, 'child, foreign, and missing-tab notifications are ignored');
+    topFullscreen = true;
+    const query = (sender) => new Promise((resolve) => listeners.msg({ type: 'swiftget-query-top-fullscreen' }, sender, resolve));
+    assert.strictEqual((await query(child)).fullscreen, true, 'new child queries current fullscreen state without a prior notification');
+    const read = fullscreenTrace.at(-1);
+    assert.strictEqual(read.id, 41); assert.strictEqual(read.options.frameId, 0, 'query reaches only the top frame');
+    topFullscreen = false;
+    assert.strictEqual((await query(child)).fullscreen, false, 'exit and navigation read current state rather than a stale worker cache');
+    assert.strictEqual((await query(otherTab)).fullscreen, false, 'queries stay in the requesting tab');
+    assert.strictEqual(fullscreenTrace.at(-1).id, 42);
+    topFullscreenUnavailable = true;
+    assert.deepStrictEqual(Object.keys(await query(child)), [], 'an unavailable top frame yields no fabricated state');
+    topFullscreenUnavailable = false;
+    let spoofReply = false;
+    assert.strictEqual(listeners.msg({ type: 'swiftget-query-top-fullscreen' }, { ...child, id: 'other-extension' }, () => { spoofReply = true; }), false);
+    assert.strictEqual(spoofReply, false, 'foreign queries are ignored');
+    console.log('fullscreen relay: same-tab, top-frame authenticated, stateless queries passed');
+  }
   // Only a dedicated extension POST registers readiness, without site data or
   // cookie/profile inspection. A popup check bypasses cached startup checks.
   {

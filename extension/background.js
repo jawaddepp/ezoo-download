@@ -909,6 +909,20 @@ function reply(promise, sendResponse) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   switch (msg.type) {
+    case "swiftget-top-fullscreen-changed":
+      // Only the extension's own top-frame script may announce a change.
+      // Send a signal, not page data, to scripts in this same tab.
+      if (typeof chrome.runtime.id !== "string" || !chrome.runtime.id || sender?.id !== chrome.runtime.id || !Number.isInteger(sender?.tab?.id) || sender.frameId !== 0) return false;
+      chrome.tabs.sendMessage(sender.tab.id, { type: "swiftget-refresh-top-fullscreen" }).catch(() => {});
+      return false;
+    case "swiftget-query-top-fullscreen":
+      // Read the current top-frame state rather than caching it in the worker:
+      // a new iframe, a navigation, or a restarted worker gets fresh state.
+      if (typeof chrome.runtime.id !== "string" || !chrome.runtime.id || sender?.id !== chrome.runtime.id || !Number.isInteger(sender?.tab?.id) || !Number.isInteger(sender.frameId) || sender.frameId <= 0) return false;
+      chrome.tabs.sendMessage(sender.tab.id, { type: "swiftget-read-top-fullscreen" }, { frameId: 0 })
+        .then((response) => sendResponse(typeof response?.fullscreen === "boolean" ? { fullscreen: response.fullscreen } : {}))
+        .catch(() => sendResponse({}));
+      return true;
     case "swiftget-download": {
       const item = msg.item || {};
       if (item.protected || item.type === "protected" || isProtectedPlayback(sender.tab && sender.tab.url, msg.referrer)) {

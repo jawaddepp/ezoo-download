@@ -168,6 +168,58 @@
   // Scroll and resize invalidate cached hit tests; the existing placement
   // timer refreshes them occasionally for page changes without new polling.
   let placementEpoch = 0;
+  // A parent can make an iframe fullscreen without changing the child's own
+  // fullscreenElement. Ask the extension worker for the top frame's state;
+  // never try to read a cross-origin parent document or accept page messages.
+  // Start embedded frames hidden until the first query returns, preventing a
+  // flash over a player that is already fullscreen when the frame loads.
+  let topFullscreen = !TOP;
+  let fullscreenQuery = 0;
+  const localFullscreen = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+  function syncTopFullscreen() {
+    if (TOP) return;
+    const query = ++fullscreenQuery;
+    // A state change is unknown until the top frame confirms it. Hide while
+    // checking so a slow worker cannot briefly expose the widget fullscreen.
+    if (!topFullscreen) {
+      topFullscreen = true;
+      placementEpoch++;
+      bubbles.forEach((b) => placeOne(b));
+    }
+    // Top and child scripts can initialize in either order. Retry a small
+    // bounded number of times; unavailable top frames stay hidden until a
+    // later authenticated announcement or navigation supplies a valid state.
+    function attempt(number) {
+      if (query !== fullscreenQuery) return;
+      let finished = false;
+      const finish = (response) => {
+        if (finished || query !== fullscreenQuery) return;
+        finished = true;
+        clearTimeout(timeout);
+        if (typeof response?.fullscreen === "boolean") {
+          if (topFullscreen !== response.fullscreen) {
+            topFullscreen = response.fullscreen;
+            placementEpoch++;
+            bubbles.forEach((b) => placeOne(b));
+          }
+        } else if (number < 3) {
+          setTimeout(() => attempt(number + 1), 200 * number);
+        }
+      };
+      const timeout = setTimeout(() => finish(null), 1000);
+      try {
+        chrome.runtime.sendMessage({ type: "swiftget-query-top-fullscreen" }, (response) => {
+          if (chrome.runtime.lastError) { finish(null); return; }
+          finish(response);
+        });
+      } catch (_) { finish(null); }
+    }
+    attempt(1);
+  }
+  function notifyTopFullscreen() {
+    if (!TOP) return;
+    try { chrome.runtime.sendMessage({ type: "swiftget-top-fullscreen-changed" }).catch?.(() => {}); } catch (_) { /* extension may be reloading */ }
+  }
   function removeAll() {
     for (const b of bubbles.values()) releaseBubble(b);
     bubbles.clear();
@@ -740,7 +792,7 @@
     const onScreen =
       r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth &&
       r.width >= 200 && r.height >= 100 && b.video.isConnected && innerWidth >= 36 && innerHeight >= 36 &&
-      !fs && !b.video.webkitDisplayingFullscreen;
+      !fs && !topFullscreen && !b.video.webkitDisplayingFullscreen;
     b.host.style.display = onScreen ? "block" : "none";
     if (!onScreen) return;
     if (b.host.parentNode !== layer()) layer().appendChild(b.host);
@@ -930,6 +982,7 @@
     document.addEventListener(ev, () => {
       placementEpoch++;
       bubbles.forEach((b) => placeOne(b));
+      notifyTopFullscreen();
       setTimeout(() => bubbles.forEach((b) => placeOne(b)), 50);
     });
   }
@@ -957,7 +1010,18 @@
     return { page: location.href, links: out };
   }
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // Only a message from this extension's background context can request or
+    // announce fullscreen state. Pages and other content scripts cannot.
+    const fromBackground = typeof chrome.runtime.id === "string" && !!chrome.runtime.id && sender?.id === chrome.runtime.id && !sender.tab;
+    if (msg.type === "swiftget-read-top-fullscreen") {
+      if (TOP && fromBackground) sendResponse({ fullscreen: localFullscreen() });
+      return false;
+    }
+    if (msg.type === "swiftget-refresh-top-fullscreen") {
+      if (!TOP && fromBackground) syncTopFullscreen();
+      return false;
+    }
     if (msg.type === "swiftget-media") update(msg.items);
     if (msg.type === "swiftget-collect-links") {
       if (!TOP) return false; // the page itself answers
@@ -965,6 +1029,10 @@
       return true;
     }
     if (msg.type === "swiftget-open-panel") {
+      // A user explicitly opening the extension is a bounded opportunity to
+      // recover after a temporarily unavailable top frame or worker. Remain
+      // hidden unless an authenticated query confirms fullscreen has ended.
+      if (!TOP && fromBackground && topFullscreen) syncTopFullscreen();
       const v = biggestVideo();
       if (!v) return false;
       let b = bubbles.get(v);
@@ -979,6 +1047,8 @@
     }
     return false;
   });
+  if (TOP) notifyTopFullscreen();
+  else syncTopFullscreen();
   chrome.runtime.sendMessage({ type: "swiftget-config" }, (res) => {
     if (!chrome.runtime.lastError && res) {
       panel = res;
