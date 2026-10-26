@@ -405,26 +405,15 @@ export component TypeIcon inherits Rectangle {
     }
 }
 
-// The original download ribbon from packaging/ezoo-icon.svg, drawn as vectors
-// so the sidebar shares the application icon's identity at every scale.
+// The sidebar uses the same generated artwork as the app and extension.
 export component BrandMark inherits Rectangle {
     width: 28px;
     height: 28px;
-    Rectangle {
-        x: parent.width * 0.0625;
-        y: parent.height * 0.0625;
-        width: parent.width * 0.875;
-        height: parent.height * 0.875;
-        border-radius: root.width * 0.1953125;
-        background: #007aff;
-    }
-    Path {
+    Image {
         width: parent.width;
         height: parent.height;
-        viewbox-width: 1024;
-        viewbox-height: 1024;
-        fill: white;
-        commands: "M376 260H584C606 260 624 278 624 300V482H694C717 482 728 509 712 525L540 697C524 713 500 713 484 697L312 525C296 509 307 482 330 482H424V372H376C345 372 320 347 320 316S345 260 376 260Z M338 752H686C707 752 724 769 724 790S707 828 686 828H338C317 828 300 811 300 790S317 752 338 752Z";
+        source: @image-url("icon-window.png");
+        image-fit: contain;
     }
 }
 

@@ -163,7 +163,7 @@
   // One "Download" bubble on every video of the page. The main video (the
   // one playing / the biggest) uses what the add-in found for the page; any
   // other video is looked up when its bubble is clicked. A bubble can be
-  // dragged anywhere on its video and stays there.
+  // dragged around its player and stays there while it remains visible.
   const bubbles = new Map(); // video -> bubble
   function removeAll() {
     for (const b of bubbles.values()) releaseBubble(b);
@@ -222,27 +222,27 @@
       font: max(13px, calc(11px / var(--z, 1)))/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; color: var(--ez-text); }
     button { appearance: none; -webkit-appearance: none; font: inherit; color: inherit; margin: 0; cursor: pointer; }
     button:focus-visible { outline: 2px solid var(--ez-accent); outline-offset: -3px; }
-    .btn { display: inline-flex; align-items: center; min-height: max(38px, calc(28px / var(--z, 1))); background: var(--ez-surface);
-      border: 1px solid var(--ez-line); border-radius: 999px; box-shadow: 0 3px 12px -3px var(--ez-shadow);
-      user-select: none; white-space: nowrap; overflow: hidden; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; background: var(--ez-surface);
+      border: 1px solid var(--ez-line); border-radius: 12px; box-shadow: 0 3px 12px -3px var(--ez-shadow);
+      user-select: none; }
     .btn.open { border-color: var(--ez-accent); }
-    .part { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; min-height: max(38px, calc(28px / var(--z, 1)));
-      background: transparent; border: 0; font-weight: 600; cursor: grab; }
+    .part { display: inline-flex; align-items: center; justify-content: center;
+      width: max(40px, calc(28px / var(--z, 1))); height: max(40px, calc(28px / var(--z, 1)));
+      padding: 0; background: transparent; border: 0; border-radius: 11px; cursor: grab; }
     .part:hover, .side:hover { background: var(--ez-group); }
     .btn.drag .part { cursor: grabbing; }
     .ico { width: max(18px, calc(14px / var(--z, 1))); height: max(18px, calc(14px / var(--z, 1))); flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
     .download-symbol { color: var(--ez-link); }
-    .caret { width: max(14px, calc(10px / var(--z, 1))); height: max(14px, calc(10px / var(--z, 1))); color: var(--ez-secondary); }
-    .count { min-width: 19px; padding: 1px 5px; border-radius: 999px; background: var(--ez-group); color: var(--ez-secondary);
-      font-size: max(11px, calc(10px / var(--z, 1))); font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     .side { display: inline-flex; align-items: center; justify-content: center; min-width: max(30px, calc(24px / var(--z, 1))); height: max(30px, calc(24px / var(--z, 1)));
       background: transparent; border: 0; border-radius: 50%; color: var(--ez-secondary); }
-    .sides { display: inline-flex; gap: 1px; align-items: center; padding: 0 4px 0 0; }
     .spin { width: 16px; text-align: center; color: var(--ez-link); font-size: 17px; line-height: 16px; }
     .list { position: absolute; right: 0; top: calc(100% + 8px); width: max(340px, calc(250px / var(--z, 1))); max-width: calc(100vw - 16px);
-      padding: 7px; max-height: 440px; overflow: auto; overscroll-behavior: contain;
+      max-height: 440px; overflow: hidden;
       background: var(--ez-surface); color: var(--ez-text); border: 1px solid var(--ez-line); border-radius: 18px;
-      box-shadow: 0 12px 30px -7px var(--ez-shadow); scrollbar-width: thin; scrollbar-color: var(--ez-line) transparent; }
+      box-shadow: 0 12px 30px -7px var(--ez-shadow); }
+    .list-scroll { max-height: 438px; padding: 7px; overflow: auto; overscroll-behavior: contain;
+      border-radius: 17px; scrollbar-width: thin; scrollbar-color: var(--ez-line) transparent; }
     .list.above { top: auto; bottom: calc(100% + 8px); }
     .list.align-start { left: 0; right: auto; }
     .head { display: flex; align-items: start; gap: 10px; padding: 9px 8px 11px; border-bottom: 1px solid var(--ez-line); margin-bottom: 4px; }
@@ -349,10 +349,10 @@
     if (!choices.length) return false;
     const target = choices[Math.max(0, Math.min(which, choices.length - 1))];
     target.focus({ preventScroll: true });
-    const box = b.root.getElementById("list");
+    const box = b.root.getElementById("list-content");
     const r = target.getBoundingClientRect(), br = box.getBoundingClientRect();
-    if (r.top < br.top + 6) box.scrollTop -= (br.top + 6 - r.top) / zoom;
-    else if (r.bottom > br.bottom - 6) box.scrollTop += (r.bottom - br.bottom + 6) / zoom;
+    if (r.top < br.top + 6) box.scrollTop -= (br.top + 6 - r.top) / b.actualZoom;
+    else if (r.bottom > br.bottom - 6) box.scrollTop += (r.bottom - br.bottom + 6) / b.actualZoom;
     return true;
   }
 
@@ -377,7 +377,8 @@
     host.style.colorScheme = "light dark";
     host.style.setProperty("--z", String(zoom));
     const root = host.attachShadow({ mode: "closed" });
-    const list = el("section", { class: "list", id: "list", role: "dialog", "aria-label": "Video download options", "aria-modal": "false" });
+    const content = el("div", { class: "list-scroll", id: "list-content" });
+    const list = el("section", { class: "list", id: "list", role: "dialog", "aria-label": "Video download options", "aria-modal": "false" }, content);
     list.hidden = true;
     const spin = el("span", { class: "spin", id: "spin", "aria-hidden": "true", text: "…" });
     spin.hidden = true;
@@ -386,13 +387,10 @@
       el("div", { class: "wrap" },
         el("div", { class: "btn", id: "main", role: "toolbar", "aria-label": "Mac Downloader video downloads" },
           el("button", { type: "button", class: "part", id: "grab", "aria-haspopup": "dialog", "aria-controls": "list", "aria-expanded": "false", title: "Choose a video format. Drag to reposition." },
-            symbol("download", "ico download-symbol"), spin, el("span", { id: "label", text: "Download" }), el("span", { class: "count", id: "count", "aria-hidden": "true" }), symbol("chevron", "ico caret")),
-          el("span", { class: "sides" },
-            el("button", { type: "button", class: "side", id: "help", title: "Widget help", "aria-label": "Widget help" }, symbol("info")),
-            el("button", { type: "button", class: "side", id: "close", title: "Hide for this video", "aria-label": "Hide download widget for this video" }, symbol("close")))
+            symbol("download", "ico download-symbol"), spin, el("span", { class: "visually-hidden", id: "label", text: "Download" }), el("span", { class: "visually-hidden", id: "count", "aria-hidden": "true" }))
         ), list)
     );
-    const b = { host, root, video, open: false, own: null, loading: false, dx: null, dy: null, help: false, focusMenu: false };
+    const b = { host, root, video, open: false, own: null, loading: false, dx: null, dy: null, help: false, focusMenu: false, actualZoom: zoom };
     const grab = root.getElementById("grab");
     // Native button activation works for mouse, keyboard and assistive tech.
     // Dragging suppresses only the click generated by that same gesture.
@@ -428,19 +426,6 @@
     grab.addEventListener("click", (e) => {
       if (suppressClick && e.detail !== 0) return;
       clicked(b, e.detail === 0);
-    });
-    root.getElementById("help").addEventListener("click", (e) => {
-      for (const other of bubbles.values()) if (other !== b && other.open) closeOne(other);
-      b.help = !b.help;
-      b.open = true;
-      b.focusMenu = e.detail === 0;
-      renderOne(b);
-    });
-    root.getElementById("close").addEventListener("click", () => {
-      b.dismissed = true;
-      b.open = false;
-      host.remove();
-      if (video.tabIndex >= 0) video.focus({ preventScroll: true });
     });
     root.addEventListener("keydown", (e) => {
       if (!b.open) return;
@@ -602,10 +587,12 @@
     const busy = b.loading || (!usable.length && list.some((i) => i.disabled && /Getting/.test(i.label)));
     const trigger = b.root.getElementById("grab");
     const box = b.root.getElementById("list");
+    const content = b.root.getElementById("list-content");
     const oldFocus = b.root.activeElement;
     const focusIndex = [...box.querySelectorAll(".item:not(:disabled), .act")].indexOf(oldFocus);
     const focusKey = oldFocus?.getAttribute?.("data-choice");
     const focusClose = oldFocus?.classList?.contains("popover-close");
+    const headerFocus = ["help", "close"].includes(oldFocus?.getAttribute?.("id")) ? oldFocus.getAttribute("id") : "";
     const protectedVideo = isProtectedVideo(b, list);
     b.root.getElementById("label").textContent = protectedVideo ? "Protected video" : busy ? "Finding formats…" : "Download";
     const count = b.root.getElementById("count");
@@ -620,22 +607,32 @@
     trigger.setAttribute("aria-label", protectedVideo ? "Netflix protected video information" : busy ? "Finding video download formats" : `Choose a video download format${usable.length ? `, ${usable.length} available` : ""}`);
     b.root.getElementById("main").classList.toggle("open", b.open);
     box.hidden = !b.open;
-    box.replaceChildren();
+    content.replaceChildren();
     // Closed controls do not need to rebuild their hidden option lists.
     if (!b.open) return;
     const title = (list.find((m) => m.yt && m.yt.title) || {}).yt;
     const heading = el("div", { class: "head" },
       el("div", { class: "heading-body" }, el("div", { class: "heading", text: protectedVideo ? "Protected Video" : "Download Video" }),
         el("div", { class: "video-title", title: (title && title.title) || cleanTitle(), text: (title && title.title) || cleanTitle() })),
-      el("button", { type: "button", class: "side popover-close", title: "Close options", "aria-label": "Close download options" }, symbol("close")));
-    heading.querySelector("button").addEventListener("click", () => closeOne(b, true));
-    box.appendChild(heading);
+      el("button", { type: "button", class: "side", id: "help", title: "Widget help", "aria-label": "Widget help" }, symbol("info")),
+      el("button", { type: "button", class: "side", id: "close", title: "Hide for this video", "aria-label": "Hide download widget for this video" }, symbol("close")),
+      el("button", { type: "button", class: "side popover-close", title: "Close options", "aria-label": "Close download options" }, symbol("chevron")));
+    heading.querySelector(".popover-close").addEventListener("click", () => closeOne(b, true));
+    heading.querySelector("#help").addEventListener("click", (e) => {
+      b.help = !b.help; b.focusMenu = e.detail === 0; renderOne(b);
+    });
+    heading.querySelector("#close").addEventListener("click", () => {
+      b.dismissed = true; b.open = false; b.host.remove();
+      if (b.video.tabIndex >= 0) b.video.focus({ preventScroll: true });
+    });
+    content.appendChild(heading);
     if (b.help) {
-      box.appendChild(el("div", { class: "help", text: "Choose a format to send it to Mac Downloader. Drag the Download button to move it. Hide removes it for this video; use the browser extension menu to show it again or change its size. Keyboard: Tab to the controls, use arrow keys to choose, and Escape to close." }));
+      content.appendChild(el("div", { class: "help", text: "Choose a format to send it to Mac Downloader. Drag the Download button to move it. Hide removes it for this video; use the browser extension menu to show it again or change its size. Keyboard: Tab to the controls, use arrow keys to choose, and Escape to close." }));
     }
     const finish = () => {
       placeOne(b);
-      if (focusClose) heading.querySelector("button").focus({ preventScroll: true });
+      if (headerFocus) heading.querySelector(`#${headerFocus}`).focus({ preventScroll: true });
+      else if (focusClose) heading.querySelector(".popover-close").focus({ preventScroll: true });
       else if (b.focusMenu || focusIndex >= 0) {
         const choices = [...box.querySelectorAll(".item:not(:disabled), .act")];
         const same = focusKey ? choices.findIndex((row) => row.getAttribute("data-choice") === focusKey) : -1;
@@ -644,7 +641,7 @@
       }
     };
     if (protectedVideo) {
-      box.appendChild(el("div", { class: "msg protected", role: "status" }, symbol("lock"), el("div", { class: "msg-body", text: NETFLIX_NOTICE })));
+      content.appendChild(el("div", { class: "msg protected", role: "status" }, symbol("lock"), el("div", { class: "msg-body", text: NETFLIX_NOTICE })));
       finish();
       return;
     }
@@ -655,12 +652,12 @@
         button.addEventListener("click", action.run);
         body.appendChild(button);
       }
-      box.appendChild(el("div", { class: "msg" + (isError ? " err" : busy ? " pending" : ""), role: "status", "aria-live": "polite" }, symbol(isError ? "warning" : busy ? "info" : "check"), body));
+      content.appendChild(el("div", { class: "msg" + (isError ? " err" : busy ? " pending" : ""), role: "status", "aria-live": "polite" }, symbol(isError ? "warning" : busy ? "info" : "check"), body));
       finish();
       return;
     }
     if (!list.length) {
-      box.appendChild(el("div", { class: "msg pending", role: "status", "aria-live": "polite" }, symbol("info"), el("div", { class: "msg-body", text: "Finding available video formats…" })));
+      content.appendChild(el("div", { class: "msg pending", role: "status", "aria-live": "polite" }, symbol("info"), el("div", { class: "msg-body", text: "Finding available video formats…" })));
       finish();
       return;
     }
@@ -669,7 +666,7 @@
       const row = el("button", { type: "button", class: "item", "aria-label": all.text },
         el("span", { class: "format-symbol" }, symbol("collection")), el("span", { class: "body" }, el("span", { class: "t all", text: all.text })), symbol("download", "ico accessory"));
       row.addEventListener("click", all.run);
-      box.appendChild(row);
+      content.appendChild(row);
     }
     const isAudio = (m) => (m.yt && (m.yt.quality === "audio" || m.yt.quality === "mp3" || /^audio\|/.test(m.yt.key || ""))) || /^audio\//i.test(m.label || "") || /^(?:mp3|m4a|aac|ogg|opus|flac|wav)$/i.test(m.ext || "");
     for (const audio of [false, true]) {
@@ -693,7 +690,7 @@
         }
         group.appendChild(row);
       }
-      box.appendChild(group);
+      content.appendChild(group);
     }
     finish();
   }
@@ -702,29 +699,66 @@
     const fs = document.fullscreenElement || document.webkitFullscreenElement;
     const r = b.video.getBoundingClientRect();
     const onScreen =
-      r.bottom > 0 && r.top < innerHeight && r.width >= 200 && r.height >= 100 && b.video.isConnected &&
+      r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth &&
+      r.width >= 200 && r.height >= 100 && b.video.isConnected && innerWidth >= 36 && innerHeight >= 36 &&
       !(fs && fs.tagName === "VIDEO") && (!fs || fs.contains(b.video) || fs.shadowRoot);
     b.host.style.display = onScreen ? "block" : "none";
     if (!onScreen) return;
     if (b.host.parentNode !== layer()) layer().appendChild(b.host);
-    // its real size (the user can make the button smaller or bigger)
-    const w = b.host.getBoundingClientRect().width || 170;
-    const h = b.root.getElementById("main").getBoundingClientRect().height || 22;
-    let x = b.dx == null ? r.right - w - 8 : r.left + b.dx;
-    let y = b.dy == null ? r.top + 8 : r.top + b.dy;
-    x = Math.max(r.left, Math.min(x, r.right - 60));
-    y = Math.max(r.top, Math.min(y, r.bottom - h));
-    b.host.style.left = `${Math.max(4, Math.min(x, innerWidth - w))}px`;
-    b.host.style.top = `${Math.max(4, Math.min(y, innerHeight - h - 4))}px`;
+    // Scale down only when the viewport is too small for the chosen size.
+    b.actualZoom = Math.min(zoom, (innerWidth - 8) / 42, (innerHeight - 8) / 42);
+    b.host.style.setProperty("--z", String(b.actualZoom));
+    const w = b.host.getBoundingClientRect().width || 42 * b.actualZoom;
+    const h = b.root.getElementById("main").getBoundingClientRect().height || 42 * b.actualZoom;
+    const rightGutter = !fs && r.right >= 0 && r.right + w + 12 <= innerWidth;
+    const leftGutter = !fs && r.left <= innerWidth && r.left - w - 12 >= 0;
+    // Prefer the gutter beside a player; fullscreen and edge-to-edge videos
+    // keep the button inside their own frame instead of over page navigation.
+    const defaultX = rightGutter ? r.right + 8 : leftGutter ? r.left - w - 8 : r.right - w - 8;
+    const minX = leftGutter ? r.left - w - 8 : r.left;
+    const maxX = rightGutter ? r.right + 8 : r.right - w;
+    const minY = r.top + 4, maxY = Math.max(minY, r.bottom - h - 4);
+    const x = Math.max(minX, Math.min(b.dx == null ? defaultX : r.left + b.dx, Math.max(minX, maxX)));
+    let y = Math.max(minY, Math.min(b.dy == null ? r.top + 8 : r.top + b.dy, maxY));
+    const visibleX = Math.max(4, Math.min(x, innerWidth - w - 4));
+    // If the original anchor scrolls away, keep the control alongside the
+    // visible part of the video while reserving space for page navigation.
+    if (y < 4 || y + h > innerHeight - 4) {
+      let safeTop = Math.min(72, Math.max(4, innerHeight - h - 4));
+      if (typeof document.elementsFromPoint === "function") {
+        for (const px of [visibleX + w / 2, innerWidth / 2]) {
+          for (const element of document.elementsFromPoint(Math.max(0, Math.min(innerWidth - 1, px)), 4)) {
+            const header = element.closest?.('header, nav, [role="banner"], [role="navigation"]');
+            if (!header) continue;
+            const bounds = header.getBoundingClientRect();
+            if (bounds.top <= 4 && bounds.bottom > 0 && bounds.bottom < innerHeight / 2) safeTop = Math.max(safeTop, bounds.bottom + 8);
+          }
+        }
+      }
+      const visibleTop = Math.max(4, r.top + 4, safeTop);
+      const visibleBottom = Math.min(innerHeight - 4, r.bottom - 4);
+      if (visibleTop + h > visibleBottom) { b.host.style.display = "none"; return; }
+      y = Math.max(visibleTop, Math.min(y, visibleBottom - h));
+    }
+    b.host.style.left = `${visibleX}px`;
+    b.host.style.top = `${y}px`;
     if (b.open) {
       const box = b.root.getElementById("list");
-      box.style.maxWidth = `${Math.max(140, (innerWidth - 16) / zoom)}px`;
+      const content = b.root.getElementById("list-content");
+      box.style.maxWidth = `${Math.max(1, (innerWidth - 16) / b.actualZoom)}px`;
       const hr = b.host.getBoundingClientRect();
-      const below = innerHeight - hr.bottom - 12, above = hr.top - 12;
-      const aboveMenu = below < Math.min(box.scrollHeight * zoom, 300) && above > below;
+      const below = Math.max(0, innerHeight - hr.bottom - 12), above = Math.max(0, hr.top - 12);
+      const aboveMenu = below < Math.min(content.scrollHeight * b.actualZoom, 300) && above > below;
       box.classList.toggle("above", aboveMenu);
-      box.style.maxHeight = `${Math.max(48 / zoom, Math.min(440, (aboveMenu ? above : below) / zoom))}px`;
-      box.classList.toggle("align-start", hr.right - box.getBoundingClientRect().width < 8);
+      const maxHeight = Math.max(1, Math.min(440, (aboveMenu ? above : below) / b.actualZoom));
+      box.style.maxHeight = `${maxHeight}px`;
+      content.style.maxHeight = `${Math.max(0, maxHeight - 2)}px`;
+      // Anchor to the button but keep the entire menu in the viewport even
+      // when the player sits near the middle of a narrow browser window.
+      const width = box.getBoundingClientRect().width;
+      const menuLeft = Math.max(4, Math.min(hr.right - width, innerWidth - width - 4));
+      box.style.right = "auto";
+      box.style.left = `${(menuLeft - hr.left) / b.actualZoom}px`;
     }
   }
 

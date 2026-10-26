@@ -62,12 +62,12 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
     attachShadow() { const root = new Element('shadowroot'); root.host = this; this._shadow = root; return root; }
     closest() { return null; }
     getBoundingClientRect() {
-      if (this.tagName === 'VIDEO') return { left: 100, top: 80, right: 740, bottom: 440, width: 640, height: 360 };
+      if (this.tagName === 'VIDEO') return this.rect || { left: 100, top: 80, right: 740, bottom: 440, width: 640, height: 360 };
       let node = this; while (node.parentNode) node = node.parentNode;
       const host = node.host || this; const z = Number(host.style['--z']) || 1;
       const left = parseFloat(host.style.left) || 500, top = parseFloat(host.style.top) || 88;
-      const width = this.classList.contains('list') ? Math.min(340, parseFloat(this.style.maxWidth) || 340) * z : 220 * z;
-      const height = this.classList.contains('list') ? Math.min(320, parseFloat(this.style.maxHeight) || 320) * z : 34 * z;
+      const width = this.classList.contains('list') ? Math.min(340, parseFloat(this.style.maxWidth) || 340) * z : 42 * z;
+      const height = this.classList.contains('list') ? Math.min(320, parseFloat(this.style.maxHeight) || 320) * z : 42 * z;
       return { left, top, right: left + width, bottom: top + height, width, height };
     }
   }
@@ -121,7 +121,7 @@ function formats() {
 {
   const f = fixture(); const root = f.root(); const trigger = root.getElementById('grab'); const box = root.getElementById('list');
   assert.equal(trigger.tagName, 'BUTTON'); assert.equal(trigger.getAttribute('aria-haspopup'), 'dialog');
-  assert.equal(box.children.length, 0, 'closed widget does not build hidden format rows');
+  assert.equal(root.getElementById('list-content').children.length, 0, 'closed widget does not build hidden format rows');
   trigger.emit('click', { detail: 0 });
   assert.equal(trigger.getAttribute('aria-expanded'), 'true'); assert.equal(box.getAttribute('role'), 'dialog');
   assert.deepEqual(root.querySelectorAll('h3').map(n => n.textContent), ['Video', 'Audio']);
@@ -152,6 +152,60 @@ function formats() {
   assert.equal(f.events.get('mousemove').size, 1);
   f.video.remove(); f.tick(700);
   assert.equal(f.hosts().length, 0); assert.equal(f.events.get('mousemove').size, 0); assert.equal(f.events.get('mouseup').size, 0);
+}
+{
+  const f = fixture(); const host = f.hosts()[0], root = f.root(), trigger = root.getElementById('grab');
+  assert.equal(host.style.left, '748px', 'the default button sits beside the player when there is room');
+  assert.equal(host.style.top, '88px');
+  trigger.emit('mousedown', { clientX: 758, clientY: 98 });
+  f.global('mousemove', { clientX: 400, clientY: 0 }); f.global('mouseup');
+  assert.equal(host.style.top, '84px', 'dragging cannot place the button in the page header');
+  assert(Number.parseFloat(host.style.left) >= 100 && Number.parseFloat(host.style.left) <= 748);
+  f.video.rect = { left: 100, top: -150, right: 740, bottom: 210, width: 640, height: 360 };
+  f.global('scroll');
+  assert.equal(host.style.display, 'block', 'a visible player keeps its control after the original anchor scrolls away');
+  assert.equal(host.style.top, '72px', 'a scrolled control remains below the reserved navigation area');
+  const header = { getBoundingClientRect: () => ({ top: 0, bottom: 100 }) };
+  f.document.elementsFromPoint = () => [{ closest: () => header }];
+  f.global('scroll'); assert.equal(host.style.top, '108px', 'a taller page header is kept clear');
+  delete f.document.elementsFromPoint;
+  f.video.rect = { left: 100, top: -310, right: 740, bottom: 50, width: 640, height: 360 };
+  f.global('scroll'); assert.equal(host.style.display, 'none', 'the control hides when no safe player area remains');
+  f.video.rect = { left: 100, top: 80, right: 740, bottom: 440, width: 640, height: 360 };
+  f.global('scroll'); assert.equal(host.style.display, 'block');
+}
+{
+  const f = fixture(), host = f.hosts()[0];
+  f.video.rect = { left: 0, top: 80, right: 1000, bottom: 640, width: 1000, height: 560 };
+  f.document.fullscreenElement = f.document.documentElement;
+  f.global('resize'); assert.equal(host.style.left, '950px', 'fullscreen stays inside the player');
+  f.document.fullscreenElement = null; f.ctx.innerWidth = 32;
+  f.global('resize'); assert.equal(host.style.display, 'none', 'very tiny viewports do not expose an offscreen control');
+}
+{
+  const f = fixture(), host = f.hosts()[0], root = f.root();
+  f.ctx.innerWidth = 400;
+  f.video.rect = { left: 100, top: 80, right: 300, bottom: 280, width: 200, height: 200 };
+  f.global('resize'); root.getElementById('grab').emit('click', { detail: 0 });
+  const box = root.getElementById('list');
+  const menuLeft = Number.parseFloat(host.style.left) + Number.parseFloat(box.style.left);
+  assert(menuLeft >= 4 && menuLeft + 340 <= 396, 'menu stays inside a narrow viewport');
+}
+{
+  const f = fixture(), root = f.root(), trigger = root.getElementById('grab');
+  trigger.emit('click', { detail: 0 });
+  const content = root.getElementById('list-content');
+  assert(content.children.length > 1, 'the bounded scroll region contains the menu');
+  assert(root.getElementById('help') && root.getElementById('close'), 'help and hide actions are available in the menu');
+  root.getElementById('help').focus();
+  root.getElementById('help').emit('click', { detail: 0 });
+  assert(content.textContent.includes('Drag the Download button'), 'help remains available');
+  assert.equal(root.activeElement.id, 'help', 'keyboard Help activation preserves focus');
+  f.send({ type: 'swiftget-media', items: formats() });
+  assert.equal(root.activeElement.id, 'help', 'asynchronous updates preserve Help focus');
+  root.getElementById('close').focus(); f.send({ type: 'swiftget-media', items: formats() });
+  assert.equal(root.activeElement.id, 'close', 'asynchronous updates preserve Hide focus');
+  root.getElementById('close').click(); assert.equal(f.hosts().length, 0);
 }
 {
   const f = fixture(); f.change({ enabled: { newValue: false } });

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render Ezoo's original SVG brand assets. Requires Python 3 and ImageMagick 7.
+"""Render Mac Downloader's SVG brand assets. Requires Python 3 and ImageMagick 7.
 
 Run from any directory: python3 packaging/render-icons.py
 The SVG is the editable source; no existing bitmap is used as input.

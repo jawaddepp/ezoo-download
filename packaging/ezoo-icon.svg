@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <title>Mac Downloader</title>
-  <desc>Original descending ribbon and receiving bar on a blue rounded square.</desc>
-  <!-- The inset mask is for the app's flattened ICNS/ICO/PNG assets. -->
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="#007AFF"/>
-  <!-- Independently drawn ribbon; the stepped tail is part of Ezoo's mark. -->
-  <path fill="#FFF" d="M376 260H584C606 260 624 278 624 300V482H694C717 482 728 509 712 525L540 697C524 713 500 713 484 697L312 525C296 509 307 482 330 482H424V372H376C345 372 320 347 320 316S345 260 376 260Z"/>
-  <rect x="300" y="752" width="424" height="76" rx="38" fill="#FFF"/>
+  <desc>A white apple and blue download arrow on a rounded blue square.</desc>
+  <!-- Original vector artwork: an apple silhouette and a simple download symbol. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#087bdf"/>
+  <path fill="#fff" d="M 512 350 C 476 333 440 320 401 326 C 330 335 280 390 272 467 C 262 559 305 677 355 736 C 386 773 417 750 456 742 C 480 737 497 751 512 753 C 527 751 544 737 568 742 C 608 750 634 770 665 735 C 696 701 717 661 733 616 C 688 600 663 566 662 528 C 661 493 681 461 714 445 C 692 374 637 329 581 329 C 552 329 530 339 512 350 Z"/>
+  <path fill="#fff" d="M 513 315 C 512 262 551 213 619 204 C 619 265 581 310 513 315 Z"/>
+  <path fill="#0063d4" d="M 488 405 H 536 V 535 L 579 492 L 613 526 L 512 627 L 411 526 L 445 492 L 488 535 Z"/>
+  <rect x="408" y="650" width="208" height="42" rx="21" fill="#0063d4"/>
 </svg>
