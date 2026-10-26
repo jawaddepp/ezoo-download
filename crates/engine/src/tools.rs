@@ -426,7 +426,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_bundle_tools_and_installation_advice() {
-        let dirs = app_tool_dirs(Path::new("/Applications/Mac Downloader.app/Contents/MacOS/EzooDownload"));
+        let dirs = app_tool_dirs(Path::new("/Applications/Mac Downloader.app/Contents/MacOS/MacDownloader"));
         assert_eq!(dirs[0], Path::new("/Applications/Mac Downloader.app/Contents/Resources/tools"));
         let plain = app_tool_dirs(Path::new("/tmp/target/release/EzooDownload"));
         assert_eq!(plain[0], Path::new("/tmp/target/release/tools"));
