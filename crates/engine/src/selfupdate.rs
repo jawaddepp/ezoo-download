@@ -1,4 +1,4 @@
-//! Windows installer updates for Ezoo Download itself.
+//! Windows installer updates for Mac Downloader itself.
 //! Other platforms use release downloads and must never run this installer.
 //!
 //! Every release on GitHub carries two files:
@@ -121,7 +121,7 @@ pub fn parse(text: &str) -> anyhow::Result<Release> {
 pub fn parse_signed(text: &str) -> anyhow::Result<Release> {
     let r = parse(text)?;
     if !signature_ok(&r, UPDATE_PUBLIC_KEY) {
-        anyhow::bail!("the update is not signed by Ezoo Download, so it is not installed");
+        anyhow::bail!("the update is not signed by Mac Downloader, so it is not installed");
     }
     Ok(r)
 }

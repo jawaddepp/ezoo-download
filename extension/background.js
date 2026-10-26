@@ -1,14 +1,14 @@
-// Ezoo Download browser integration (Manifest V3 service worker)
-//  1. takes over browser downloads and hands them to the Ezoo Download app
+// Mac Downloader browser integration (Manifest V3 service worker)
+//  1. takes over browser downloads and hands them to the Mac Downloader app
 //     together with cookies + referrer, so links behind a login still work
 //  2. watches network responses for video/audio and HLS streams and offers
 //     a "Download this video" button on the page
 //  3. Videos on web pages: the app finds the qualities with yt-dlp,
 //     downloads video + audio with many connections and joins them
-//  4. adds "Download with Ezoo Download", "Download all links with Ezoo
-//     Download" and "Download video with Ezoo Download" to the right-click menu
+//  4. adds "Download with Mac Downloader", "Download all links with Mac
+//     Downloader" and "Download video with Mac Downloader" to the right-click menu
 //  5. follows the app's Options: file types to take, sites to leave alone,
-//     the keys that skip / force Ezoo Download, the video panel
+//     the keys that skip / force Mac Downloader, the video panel
 
 // Chrome / Edge / Opera load yt-core.js here; Firefox lists it in its manifest
 if (typeof importScripts === "function") importScripts("yt-core.js");
@@ -253,7 +253,7 @@ async function sendToApp({ url, audioUrl, referrer, fileName, headers, sourcePag
     },
     3000
   );
-  if (!r.ok) throw new Error(`Ezoo Download answered HTTP ${r.status}`);
+  if (!r.ok) throw new Error(`Mac Downloader answered HTTP ${r.status}`);
 }
 
 // ---------------------------------------------------------------- app options
@@ -299,7 +299,7 @@ function extensionOf(name) {
   return dot > 0 ? last.slice(dot + 1).toLowerCase() : "";
 }
 
-/** Should Ezoo Download take this browser download? (Options > File Types rules) */
+/** Should Mac Downloader take this browser download? (Options > File Types rules) */
 function wanted(cfg, url, fileName, mime, keys) {
   if (!cfg) return true; // old app: take everything like before
   if (cfg.skipKey && cfg.skipKey !== "none" && keys[cfg.skipKey]) return false;
@@ -477,8 +477,8 @@ async function itemsForTab(tabId) {
           items.push({ label: "Can't get this video", sub: yt.resolveError, disabled: true });
         } else if (yt.sabr) {
           items.push({
-            label: "This video needs Ezoo Download",
-            sub: "Open Ezoo Download with yt-dlp installed and reload the page",
+            label: "This video needs Mac Downloader",
+            sub: "Open Mac Downloader with yt-dlp installed and reload the page",
             disabled: true,
           });
         }
@@ -706,7 +706,7 @@ async function resolveYoutube(tabId, pageUrl) {
   try {
     change = await askApp(`https://www.youtube.com/watch?v=${videoId}`);
   } catch (e) {
-    change = { resolveError: (await appAlive()) ? String((e && e.message) || e) : "Ezoo Download is not running" };
+    change = { resolveError: (await appAlive()) ? String((e && e.message) || e) : "Mac Downloader is not running" };
   } finally {
     if (resolving.get(tabId) === videoId) resolving.delete(tabId);
   }
@@ -740,7 +740,7 @@ async function resolvePage(tabId, page, embedded = false) {
   try {
     change = await askApp(page);
   } catch (e) {
-    change = { resolveError: (await appAlive()) ? String((e && e.message) || e) : "Ezoo Download is not running" };
+    change = { resolveError: (await appAlive()) ? String((e && e.message) || e) : "Mac Downloader is not running" };
   } finally {
     if (resolving.get(tabId) === page) resolving.delete(tabId);
   }
@@ -780,7 +780,7 @@ async function resolveOneVideo(msg, tab) {
       if (r.resolved && r.resolved.options.length) items.unshift(...optionItems(r.resolved, page));
       else if (!items.length) return { error: r.resolveError || "Can't get this video" };
     } catch (e) {
-      if (!items.length) return { error: (await appAlive()) ? String((e && e.message) || e) : "Ezoo Download is not running" };
+      if (!items.length) return { error: (await appAlive()) ? String((e && e.message) || e) : "Mac Downloader is not running" };
     }
   }
   return items.length ? { items } : { error: "Can't get this video" };
@@ -810,25 +810,25 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 
 function makeMenus() {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: "swiftget-link", title: "Download with Ezoo Download", contexts: ["link"] });
+    chrome.contextMenus.create({ id: "swiftget-link", title: "Download with Mac Downloader", contexts: ["link"] });
     chrome.contextMenus.create({
       id: "swiftget-media",
-      title: "Download this media with Ezoo Download",
+      title: "Download this media with Mac Downloader",
       contexts: ["video", "audio", "image"],
     });
     chrome.contextMenus.create({
       id: "swiftget-video",
-      title: "Download video with Ezoo Download",
+      title: "Download video with Mac Downloader",
       contexts: ["page", "video", "frame"],
     });
     chrome.contextMenus.create({
       id: "swiftget-all",
-      title: "Download all links with Ezoo Download",
+      title: "Download all links with Mac Downloader",
       contexts: ["page", "frame", "link", "image"],
     });
     chrome.contextMenus.create({
       id: "swiftget-selected",
-      title: "Download selected links with Ezoo Download",
+      title: "Download selected links with Mac Downloader",
       contexts: ["selection"],
     });
   });
@@ -881,7 +881,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     return;
   }
   if (info.menuItemId === "swiftget-all" || info.menuItemId === "swiftget-selected") {
-    if (tab) sendAllLinks(tab, info.menuItemId === "swiftget-selected").catch((e) => console.warn("Ezoo Download:", e));
+    if (tab) sendAllLinks(tab, info.menuItemId === "swiftget-selected").catch((e) => console.warn("Mac Downloader:", e));
     return;
   }
   if (info.menuItemId === "swiftget-video") {
@@ -895,7 +895,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
   const url = info.linkUrl || info.srcUrl;
   if (!url || !/^https?:/i.test(url)) return;
-  sendToApp({ url, referrer: info.pageUrl }).catch((e) => console.warn("Ezoo Download:", e));
+  sendToApp({ url, referrer: info.pageUrl }).catch((e) => console.warn("Mac Downloader:", e));
 });
 
 // ---------------------------------------------------------------- messages from page/popup

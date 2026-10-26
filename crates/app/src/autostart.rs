@@ -27,6 +27,8 @@ mod imp {
         reg(&["query", r"HKCU\Software\Ezoo\EzooDownload", "/v", "Installed"])
     }
 
+    pub fn refresh_legacy_path() {}
+
     pub fn set(enabled: bool) -> bool {
         if enabled {
             let Ok(exe) = std::env::current_exe() else { return false };
@@ -75,6 +77,35 @@ mod imp {
         false
     }
 
+    // Only replace a plist written by the old app at the sibling location.
+    // Never create a LaunchAgent or overwrite a user-customized one.
+    fn refresh_at(path: &Path, executable: &Path) -> bool {
+        let Some(macos) = executable.parent() else { return false };
+        let Some(contents) = macos.parent() else { return false };
+        let Some(bundle) = contents.parent() else { return false };
+        if executable.file_name().and_then(|s| s.to_str()) != Some("EzooDownload")
+            || macos.file_name().and_then(|s| s.to_str()) != Some("MacOS")
+            || contents.file_name().and_then(|s| s.to_str()) != Some("Contents")
+            || bundle.file_name().and_then(|s| s.to_str()) != Some("Mac Downloader.app") {
+            return false;
+        }
+        let Some(app_dir) = bundle.parent() else { return false };
+        let old_executable = app_dir.join("Ezoo Download.app/Contents/MacOS/EzooDownload");
+        if std::fs::read_to_string(path).ok().as_deref() != Some(plist(&old_executable).as_str()) {
+            return false;
+        }
+        let staged = path.with_extension(format!("{}.tmp", std::process::id()));
+        let result = std::fs::write(&staged, plist(executable)).and_then(|_| std::fs::rename(&staged, path));
+        if result.is_err() { let _ = std::fs::remove_file(staged); }
+        result.is_ok()
+    }
+
+    pub fn refresh_legacy_path() {
+        if let (Some(path), Ok(executable)) = (agent_path(), std::env::current_exe()) {
+            let _ = refresh_at(&path, &executable);
+        }
+    }
+
     pub fn set(enabled: bool) -> bool {
         let Some(path) = agent_path() else { return false };
         if !enabled {
@@ -97,8 +128,27 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::plist;
+        use super::{plist, refresh_at};
         use std::path::Path;
+
+        #[test]
+        fn migration_only_updates_unmodified_opted_in_legacy_agent() {
+            let dir = std::env::temp_dir().join(format!("mac-downloader-autostart-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let agent = dir.join("agent.plist");
+            let old = dir.join("Ezoo Download.app/Contents/MacOS/EzooDownload");
+            let new = dir.join("Mac Downloader.app/Contents/MacOS/EzooDownload");
+            assert!(!refresh_at(&agent, &new));
+            assert!(!agent.exists());
+            std::fs::write(&agent, plist(&old)).unwrap();
+            assert!(refresh_at(&agent, &new));
+            assert_eq!(std::fs::read_to_string(&agent).unwrap(), plist(&new));
+            assert!(!refresh_at(&agent, &new));
+            std::fs::write(&agent, "custom agent").unwrap();
+            assert!(!refresh_at(&agent, &new));
+            assert_eq!(std::fs::read_to_string(&agent).unwrap(), "custom agent");
+            std::fs::remove_dir_all(dir).unwrap();
+        }
 
         #[test]
         fn launch_agent_escapes_paths_and_starts_a_visible_window() {
@@ -121,6 +171,7 @@ mod imp {
     pub fn installed_by_setup() -> bool {
         false
     }
+    pub fn refresh_legacy_path() {}
 }
 
-pub use imp::{installed_by_setup, is_enabled, set};
+pub use imp::{installed_by_setup, is_enabled, refresh_legacy_path, set};

@@ -138,7 +138,7 @@ function formats() {
   trigger.emit('click', { detail: 0 }); root.querySelectorAll('.item:not(:disabled)')[0].click();
   const sent = f.messages.find(m => m.type === 'swiftget-download'); assert.equal(sent.item.yt.key, '2160p|WEBM');
   assert.equal(sent.referrer, f.ctx.location.href); assert.equal(sent.title, f.document.title);
-  assert(root.getElementById('list').textContent.includes('Sent to Ezoo Download.'));
+  assert(root.getElementById('list').textContent.includes('Sent to Mac Downloader.'));
   assert.equal(root.querySelectorAll('img').length, 0, 'page titles are plain text, not markup');
 }
 {

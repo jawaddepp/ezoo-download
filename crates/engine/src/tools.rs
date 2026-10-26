@@ -1,7 +1,7 @@
-//! The helper programs that come with Ezoo Download: yt-dlp (finds the video
+//! The helper programs that come with Mac Downloader: yt-dlp (finds the video
 //! links), ffmpeg (joins video + audio) and aria2 (torrents), all from their
 //! GitHub releases. They live in the "tools" folder
-//! of the install folder. Once a day, silently, Ezoo Download checks for new
+//! of the install folder. Once a day, silently, Mac Downloader checks for new
 //! versions and updates them, and puts them back if one went missing.
 //! On macOS the helpers are installed and updated separately with Homebrew;
 //! neither a signed app bundle nor package-managed tools are modified.
@@ -115,7 +115,7 @@ pub fn missing_tool_message(name: &str) -> String {
         let formula = if name == "aria2c" { "aria2" } else { name };
         format!("{name} is missing. Install it with `brew install {formula}`, then try again.")
     } else if cfg!(windows) {
-        format!("{name}.exe is missing. Ezoo Download gets it by itself in a minute (internet needed), then try again")
+        format!("{name}.exe is missing. Mac Downloader gets it by itself in a minute (internet needed), then try again")
     } else {
         format!("{name} is missing. Install it with your package manager, then try again.")
     }
@@ -426,8 +426,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn mac_bundle_tools_and_installation_advice() {
-        let dirs = app_tool_dirs(Path::new("/Applications/Ezoo Download.app/Contents/MacOS/EzooDownload"));
-        assert_eq!(dirs[0], Path::new("/Applications/Ezoo Download.app/Contents/Resources/tools"));
+        let dirs = app_tool_dirs(Path::new("/Applications/Mac Downloader.app/Contents/MacOS/EzooDownload"));
+        assert_eq!(dirs[0], Path::new("/Applications/Mac Downloader.app/Contents/Resources/tools"));
         let plain = app_tool_dirs(Path::new("/tmp/target/release/EzooDownload"));
         assert_eq!(plain[0], Path::new("/tmp/target/release/tools"));
         assert!(missing_tool_message("aria2c").contains("brew install aria2`"));

@@ -621,7 +621,7 @@ fn login_wall(msg: &str) -> bool {
 
 /// The error shown when a video needs a login or an age check and no
 /// cookies of the browser help.
-pub const LOGIN_NEEDED: &str = "this video needs a login or an age check: open it once in the browser where you are signed in (with the Ezoo Download extension), then try again";
+pub const LOGIN_NEEDED: &str = "this video needs a login or an age check: open it once in the browser where you are signed in (with the Mac Downloader extension), then try again";
 
 #[derive(Clone, Copy)]
 enum CookieAccess {

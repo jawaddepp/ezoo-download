@@ -72,7 +72,7 @@ pub fn merge(video: &Path, audio: &Path, output: &Path, final_name: &str) -> any
         bail!("{}", crate::tools::missing_tool_message("ffmpeg"));
         #[cfg(not(target_os = "macos"))]
         bail!(
-            "ffmpeg.exe is missing. Ezoo Download gets it by itself in a few minutes \
+            "ffmpeg.exe is missing. Mac Downloader gets it by itself in a few minutes \
              (internet needed) - then press Resume to join video and audio"
         );
     };
@@ -107,7 +107,7 @@ pub fn preview_snapshot(video: &Path, video_ready: u64, audio: Option<(&Path, u6
         #[cfg(target_os = "macos")]
         bail!("{}", crate::tools::missing_tool_message("ffmpeg"));
         #[cfg(not(target_os = "macos"))]
-        bail!("ffmpeg.exe is missing. Ezoo Download gets it by itself in a few minutes (internet needed)");
+        bail!("ffmpeg.exe is missing. Mac Downloader gets it by itself in a few minutes (internet needed)");
     };
     // only the part with no gap ("subfile": ffmpeg reads just those bytes)
     let part = |p: &Path, n: u64| {
@@ -143,7 +143,7 @@ pub fn to_mp3(input: &Path, output: &Path, kbps: u64) -> anyhow::Result<()> {
         bail!("{}", crate::tools::missing_tool_message("ffmpeg"));
         #[cfg(not(target_os = "macos"))]
         bail!(
-            "ffmpeg.exe is missing. Ezoo Download gets it by itself in a few minutes \
+            "ffmpeg.exe is missing. Mac Downloader gets it by itself in a few minutes \
              (internet needed) - then press Resume to make the MP3 file"
         );
     };

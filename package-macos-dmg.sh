@@ -20,7 +20,7 @@ if [[ ! -x "$tool_dir/bin/dmgbuild" ]]; then
     "$tool_dir/bin/python" -m pip install --disable-pip-version-check -r packaging/dmg-requirements.txt
 fi
 mkdir -p "$(dirname "$image")"
-"$tool_dir/bin/dmgbuild" -s packaging/dmg-settings.py -D "app=$app" "Ezoo Download" "$image"
+"$tool_dir/bin/dmgbuild" -s packaging/dmg-settings.py -D "app=$app" "Mac Downloader" "$image"
 hdiutil verify "$image"
 
 # Verify the packaged copy, too: Finder attributes must not invalidate the

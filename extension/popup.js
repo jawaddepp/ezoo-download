@@ -144,7 +144,7 @@ function mediaRow({ label, detail, kind, unavailable, message, playlist }) {
       button.replaceChildren(icon("check"), buttonLabel);
     } else {
       buttonLabel.textContent = "Try Again";
-      error.textContent = "Open Ezoo Download, then try again.";
+      error.textContent = "Open Mac Downloader, then try again.";
       error.hidden = false;
       showConnection(false);
     }

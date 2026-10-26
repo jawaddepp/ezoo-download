@@ -1,4 +1,4 @@
-name: Build Ezoo Download for Windows and macOS
+name: Build Mac Downloader for Windows and macOS
 
 # Every push: build and keep the result as an artifact.
 # A push to main whose commit message contains [release] also publishes a
@@ -66,12 +66,12 @@ jobs:
         run: ./build-macos.sh --target "${{ matrix.target }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: EzooDownload-macos-${{ matrix.arch }}
+          name: MacDownloader-macos-${{ matrix.arch }}
           path: |
-            dist/EzooDownload-macos-${{ matrix.arch }}.dmg
-            dist/EzooDownload-macos-${{ matrix.arch }}.dmg.sha256
-            dist/EzooDownload-macos-${{ matrix.arch }}.zip
-            dist/EzooDownload-macos-${{ matrix.arch }}.zip.sha256
+            dist/MacDownloader-macos-${{ matrix.arch }}.dmg
+            dist/MacDownloader-macos-${{ matrix.arch }}.dmg.sha256
+            dist/MacDownloader-macos-${{ matrix.arch }}.zip
+            dist/MacDownloader-macos-${{ matrix.arch }}.zip.sha256
           if-no-files-found: error
 
   publish-macos:
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: EzooDownload-macos-*
+          pattern: MacDownloader-macos-*
           path: macos-artifacts
           merge-multiple: true
       - name: Attach macOS packages to release

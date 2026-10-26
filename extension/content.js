@@ -384,7 +384,7 @@
     root.append(
       el("style", { text: STYLE }),
       el("div", { class: "wrap" },
-        el("div", { class: "btn", id: "main", role: "toolbar", "aria-label": "Ezoo video downloads" },
+        el("div", { class: "btn", id: "main", role: "toolbar", "aria-label": "Mac Downloader video downloads" },
           el("button", { type: "button", class: "part", id: "grab", "aria-haspopup": "dialog", "aria-controls": "list", "aria-expanded": "false", title: "Choose a video format. Drag to reposition." },
             symbol("download", "ico download-symbol"), spin, el("span", { id: "label", text: "Download" }), el("span", { class: "count", id: "count", "aria-hidden": "true" }), symbol("chevron", "ico caret")),
           el("span", { class: "sides" },
@@ -517,8 +517,8 @@
   // The app is closed: offer to open it, then do what the user wanted.
   function notRunning(b, retry) {
     b.open = true;
-    renderOne(b, "Ezoo Download is not running.", true, {
-      text: "Open Ezoo Download",
+    renderOne(b, "Mac Downloader is not running.", true, {
+      text: "Open Mac Downloader",
       run: () => {
         // the program registers "ezoo-download:" when it is installed
         const a = document.createElement("a");
@@ -527,7 +527,7 @@
         document.documentElement.appendChild(a);
         a.click();
         a.remove();
-        renderOne(b, "Opening Ezoo Download…");
+        renderOne(b, "Opening Mac Downloader…");
         let tries = 0;
         const wait = setInterval(() => {
           tries++;
@@ -538,7 +538,7 @@
               retry();
             } else if (tries >= 25) {
               clearInterval(wait);
-              renderOne(b, "Ezoo Download did not start. Open the app from Applications or your app launcher, then try again.", true);
+              renderOne(b, "Mac Downloader did not start. Open the app from Applications or your app launcher, then try again.", true);
             }
           });
         }, 1000);
@@ -592,7 +592,7 @@
   function sendPlaylist(b) {
     chrome.runtime.sendMessage({ type: "swiftget-playlist", url: location.href }, (res) => {
       if (chrome.runtime.lastError || !res || !res.ok) return notRunning(b, () => sendPlaylist(b));
-      flashOne(b, "Playlist opened in Ezoo Download.", false);
+      flashOne(b, "Playlist opened in Mac Downloader.", false);
     });
   }
 
@@ -631,7 +631,7 @@
     heading.querySelector("button").addEventListener("click", () => closeOne(b, true));
     box.appendChild(heading);
     if (b.help) {
-      box.appendChild(el("div", { class: "help", text: "Choose a format to send it to Ezoo Download. Drag the Download button to move it. Hide removes it for this video; use the browser extension menu to show it again or change its size. Keyboard: Tab to the controls, use arrow keys to choose, and Escape to close." }));
+      box.appendChild(el("div", { class: "help", text: "Choose a format to send it to Mac Downloader. Drag the Download button to move it. Hide removes it for this video; use the browser extension menu to show it again or change its size. Keyboard: Tab to the controls, use arrow keys to choose, and Escape to close." }));
     }
     const finish = () => {
       placeOne(b);
@@ -770,7 +770,7 @@
       { type: "swiftget-download", item: m, title: document.title, fileName, referrer: location.href },
       (res) => {
         if (chrome.runtime.lastError || !res || !res.ok) notRunning(b, () => download(b, m));
-        else flashOne(b, "Sent to Ezoo Download.", false);
+        else flashOne(b, "Sent to Mac Downloader.", false);
       }
     );
   }
@@ -789,7 +789,7 @@
     for (const b of bubbles.values()) if (!b.own && !b.loading) renderOne(b);
   }
 
-  // magnet links of torrents go to Ezoo Download (Alt + click: to the browser)
+  // magnet links of torrents go to Mac Downloader (Alt + click: to the browser)
   addEventListener(
     "click",
     (e) => {

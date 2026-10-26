@@ -62,8 +62,8 @@ lipo "$binary" -verify_arch "$arch"
 
 version="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' Cargo.toml | head -n 1)"
 [[ -n "$version" ]] || { echo "Could not read the workspace version." >&2; exit 1; }
-app="dist/macos-$arch/Ezoo Download.app"
-archive="dist/EzooDownload-macos-$arch.zip"
+app="dist/macos-$arch/Mac Downloader.app"
+archive="dist/MacDownloader-macos-$arch.zip"
 icon_work="$(mktemp -d "${TMPDIR:-/tmp}/ezoo-macos.XXXXXX")"
 trap 'rm -rf "$icon_work"' EXIT
 rm -rf "$app"
@@ -105,8 +105,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 <plist version="1.0"><dict>
     <key>CFBundleExecutable</key><string>EzooDownload</string>
     <key>CFBundleIdentifier</key><string>com.ezoo.EzooDownload</string>
-    <key>CFBundleName</key><string>Ezoo Download</string>
-    <key>CFBundleDisplayName</key><string>Ezoo Download</string>
+    <key>CFBundleName</key><string>Mac Downloader</string>
+    <key>CFBundleDisplayName</key><string>Mac Downloader</string>
     <key>CFBundleIconFile</key><string>EzooDownload.icns</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
@@ -121,7 +121,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
     <key>LSFileQuarantineEnabled</key><true/>
-    <key>NSAppleEventsUsageDescription</key><string>Ezoo Download uses System Events when you choose to shut down your Mac after downloads finish.</string>
+    <key>NSAppleEventsUsageDescription</key><string>Mac Downloader uses System Events when you choose to shut down your Mac after downloads finish.</string>
     <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Ahmed Ezzat</string>
 </dict></plist>
 EOF
@@ -133,7 +133,7 @@ codesign --verify --strict "$app"
 rm -f "$archive"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
 (cd dist && shasum -a 256 "$(basename "$archive")" > "$(basename "$archive").sha256")
-./package-macos-dmg.sh "$app" "dist/EzooDownload-macos-$arch.dmg"
+./package-macos-dmg.sh "$app" "dist/MacDownloader-macos-$arch.dmg"
 
 echo "Built: $app"
 echo "Archive: $archive"

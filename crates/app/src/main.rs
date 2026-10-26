@@ -1,4 +1,4 @@
-// Ezoo Download — desktop app.
+// Mac Downloader — desktop app.
 // No console window in release builds on Windows.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
@@ -38,7 +38,7 @@ use swiftget_engine::{
     ProbeResult, RequestHeaders, Settings, Status,
 };
 
-pub(crate) const APP: &str = "Ezoo Download";
+pub(crate) const APP: &str = "Mac Downloader";
 
 /// What the browser extension sends along with a video link.
 #[derive(Default, Clone)]
@@ -294,6 +294,8 @@ fn main() -> anyhow::Result<()> {
     swiftget_engine::tools::spawn_updater(rt.handle(), mgr.client(), data_dir.clone());
 
     let main = MainWindow::new()?;
+    // Preserve an existing opt-in sign-in launcher after the app bundle is renamed.
+    autostart::refresh_legacy_path();
     let add = AddDialog::new()?;
     let batch = BatchDialog::new()?;
     let settings_dlg = SettingsDialog::new()?;
@@ -428,7 +430,7 @@ fn main() -> anyhow::Result<()> {
         let ui2 = ui.clone();
         API_DISPATCH.with(|dispatch| *dispatch.borrow_mut() = Some(Rc::new(move || {
             if overflow_ui.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                message("Too many browser requests arrived while Ezoo Download was busy. Some were skipped; please try those downloads again.");
+                message("Too many browser requests arrived while Mac Downloader was busy. Some were skipped; please try those downloads again.");
             }
             // Yield between batches so a burst cannot monopolize the UI.
             for _ in 0..32 {
@@ -1031,7 +1033,7 @@ fn wire_main(ui: &Ui) {
         std::thread::spawn(|| {
             let text = match swiftget_engine::ytdlp::update_now() {
                 Ok(out) => tf(
-                    "Ezoo Download {}\n\nThe video downloader (yt-dlp) is up to date.\n\n{}",
+                    "Mac Downloader {}\n\nThe video downloader (yt-dlp) is up to date.\n\n{}",
                     &[&env!("CARGO_PKG_VERSION"), &out],
                 ),
                 Err(e) => tf("Could not update yt-dlp:\n\n{}", &[&format!("{e:#}")]),
@@ -2785,9 +2787,9 @@ pub(crate) fn open_download(path: &std::path::Path) {
 /// An error of the engine in words the user understands, in their language.
 pub(crate) fn err_text(e: &str) -> String {
     if e.contains("needs a login or an age check") {
-        t("This video needs a login or an age check. Open it once in the browser where you are signed in (with the Ezoo Download extension), then try again.")
+        t("This video needs a login or an age check. Open it once in the browser where you are signed in (with the Mac Downloader extension), then try again.")
     } else if e.contains("is already registered") {
-        t("This torrent is already running (it may still be sharing its files). Wait a little, or exit Ezoo Download and open it again.")
+        t("This torrent is already running (it may still be sharing its files). Wait a little, or exit Mac Downloader and open it again.")
     } else if e.contains("the link has expired or the file was removed") {
         t("The link has expired or the file was removed. Right-click the download and use \"Refresh download address\".")
     } else {

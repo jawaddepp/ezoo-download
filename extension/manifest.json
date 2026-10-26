@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Ezoo Download",
-  "version": "1.0.6.3",
-  "description": "Ezoo Download extension.",
+  "name": "Mac Downloader",
+  "version": "1.0.6.4",
+  "description": "Mac Downloader extension.",
   "permissions": [
     "downloads",
     "cookies",
@@ -18,7 +18,7 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Ezoo Download",
+    "default_title": "Mac Downloader",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

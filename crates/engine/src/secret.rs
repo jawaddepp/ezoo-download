@@ -128,21 +128,21 @@ mod os {
         }
         let keychain = SecKeychain::default().context("could not open the login Keychain to protect credentials")?;
         let read_key = || -> anyhow::Result<[u8; 32]> {
-            let (password, _) = keychain.find_generic_password(SERVICE, ACCOUNT).context("could not read the Ezoo Download credential key")?;
-            password.as_ref().try_into().map_err(|_| anyhow::anyhow!("the Ezoo Download credential key has an invalid size"))
+            let (password, _) = keychain.find_generic_password(SERVICE, ACCOUNT).context("could not read the Mac Downloader credential key")?;
+            password.as_ref().try_into().map_err(|_| anyhow::anyhow!("the Mac Downloader credential key has an invalid size"))
         };
         let key = match keychain.find_generic_password(SERVICE, ACCOUNT) {
-            Ok((password, _)) => password.as_ref().try_into().map_err(|_| anyhow::anyhow!("the Ezoo Download credential key has an invalid size"))?,
+            Ok((password, _)) => password.as_ref().try_into().map_err(|_| anyhow::anyhow!("the Mac Downloader credential key has an invalid size"))?,
             Err(e) if e.code() == ITEM_NOT_FOUND && create => {
                 let mut generated = [0u8; 32];
                 SystemRandom::new().fill(&mut generated).map_err(|_| anyhow::anyhow!("could not generate a credential key"))?;
                 match keychain.add_generic_password(SERVICE, ACCOUNT, &generated) {
                     Ok(()) => generated,
                     Err(e) if e.code() == DUPLICATE_ITEM => read_key()?,
-                    Err(e) => return Err(e).context("could not save the Ezoo Download credential key; credentials were not saved"),
+                    Err(e) => return Err(e).context("could not save the Mac Downloader credential key; credentials were not saved"),
                 }
             }
-            Err(e) => return Err(e).context("could not read the Ezoo Download credential key"),
+            Err(e) => return Err(e).context("could not read the Mac Downloader credential key"),
         };
         *cached = Some(key);
         Ok(key)

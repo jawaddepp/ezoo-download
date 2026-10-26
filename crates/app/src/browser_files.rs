@@ -110,7 +110,7 @@ fn read_marker(target: &Path, firefox: bool) -> Result<Marker> {
     }
     let marker: Marker = serde_json::from_value(small_json(&target.join(MARKER))?)?;
     if marker.owner != OWNER || marker.schema != 1 || marker.flavor != flavor(firefox) || !valid_version(&marker.version) {
-        bail!("The extension folder is not managed by Ezoo Download");
+        bail!("The extension folder is not managed by Mac Downloader");
     }
     Ok(marker)
 }

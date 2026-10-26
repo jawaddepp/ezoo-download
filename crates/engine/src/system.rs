@@ -129,7 +129,7 @@ pub fn mark_from_internet(file: &Path, host_url: &str, referrer: Option<&str>) {
             .map(|d| d.as_secs()).unwrap_or(0);
         // Mark a new internet download, never a user-approved application.
         // No URL, cookie, query token or local path is stored in the value.
-        let value = format!("0001;{now:x};Ezoo Download;");
+        let value = format!("0001;{now:x};Mac Downloader;");
         let name = c"com.apple.quarantine";
         // SAFETY: all pointers remain valid for the call and value.len()
         // describes the complete byte buffer. Filesystems without xattrs
@@ -344,7 +344,7 @@ mod tests {
         assert!(size > 0);
         let value = std::str::from_utf8(&value[..size as usize]).unwrap();
         assert!(value.starts_with("0001;"));
-        assert!(value.ends_with(";Ezoo Download;"));
+        assert!(value.ends_with(";Mac Downloader;"));
         assert!(!value.contains("password") && !value.contains("private") && !value.contains("example.test"));
         std::fs::remove_file(file).unwrap();
     }

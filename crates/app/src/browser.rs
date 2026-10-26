@@ -181,7 +181,7 @@ fn configure(ui: &Ui) {
     SETUP_ERROR.with(|error| error.set(false));
     let Some(d) = ui.browsers.upgrade() else { return };
     d.set_setup_title(text("Connect Your Browser", "اربط متصفحك بالبرنامج").into());
-    d.set_setup_detail(text("Send downloads and videos straight to Ezoo Download. Choose your browser, then start setup. If the browser asks, choose your usual profile.", "أرسل التنزيلات والفيديوهات مباشرة إلى Ezoo Download. اختر متصفحك ثم ابدأ الإعداد. إذا طلب المتصفح ذلك، اختر ملفك الشخصي المعتاد.").into());
+    d.set_setup_detail(text("Send downloads and videos straight to Mac Downloader. Choose your browser, then start setup. If the browser asks, choose your usual profile.", "أرسل التنزيلات والفيديوهات مباشرة إلى Mac Downloader. اختر متصفحك ثم ابدأ الإعداد. إذا طلب المتصفح ذلك، اختر ملفك الشخصي المعتاد.").into());
     d.set_connected(false);
     d.set_notice(SharedString::new());
     d.set_folder(SharedString::new());
@@ -199,10 +199,10 @@ fn configure(ui: &Ui) {
     }
     if !b.store.is_empty() || (b.firefox && firefox_xpi().is_some()) {
         d.set_first_title(text("Add the Extension", "أضف الإضافة").into());
-        d.set_first_detail(text("Approve adding Ezoo Download in the browser window.", "وافق على إضافة Ezoo Download في نافذة المتصفح.").into());
+        d.set_first_detail(text("Approve adding Mac Downloader in the browser window.", "وافق على إضافة Mac Downloader في نافذة المتصفح.").into());
         d.set_second_title(text("Return Here", "ارجع إلى هنا").into());
         d.set_second_detail(text("This window will confirm when the extension connects.", "ستظهر رسالة تأكيد هنا عند اتصال الإضافة.").into());
-        d.set_fallback(text("Open the extension in your browser and keep Ezoo Download running.", "افتح الإضافة في المتصفح واترك Ezoo Download قيد التشغيل.").into());
+        d.set_fallback(text("Open the extension in your browser and keep Mac Downloader running.", "افتح الإضافة في المتصفح واترك Mac Downloader قيد التشغيل.").into());
     } else if b.firefox {
         d.set_first_title(text("Load a Temporary Add-on", "حمّل إضافة مؤقتة").into());
         d.set_first_detail(text("On Firefox's debugging page, click Load Temporary Add-on…", "في صفحة تصحيح Firefox، اضغط «تحميل إضافة مؤقتة…».").into());
@@ -215,12 +215,12 @@ fn configure(ui: &Ui) {
         d.set_first_detail(text("Use the Developer mode switch on the browser's extensions page.", "فعّل مفتاح «وضع المطوّر» في صفحة إضافات المتصفح.").into());
         if b.name == "Chrome" {
             d.set_second_title(text("Drag the Extension Folder", "اسحب مجلد الإضافة").into());
-            d.set_second_detail(text("Drag the selected Ezoo Download Extension folder from Finder or Explorer onto the Chrome extensions page. Chrome will add it.", "اسحب مجلد Ezoo Download Extension المحدد من Finder أو مستكشف الملفات إلى صفحة إضافات Chrome لإضافته.").into());
+            d.set_second_detail(text("Drag the selected extension folder from Finder or Explorer onto the Chrome extensions page. Chrome will add it.", "اسحب مجلد الإضافة المحدد من Finder أو مستكشف الملفات إلى صفحة إضافات Chrome لإضافته.").into());
         } else {
             d.set_second_title(text("Load the Extension Folder", "حمّل مجلد الإضافة").into());
-            d.set_second_detail(text("Click Load unpacked and choose the prepared Ezoo Download Extension folder. Open Having Trouble? for the file-picker shortcut.", "اضغط «تحميل إضافة غير مضغوطة» واختر مجلد Ezoo Download Extension المجهز. افتح «هل تواجه مشكلة؟» لمعرفة اختصار اختيار المجلد.").into());
+            d.set_second_detail(text("Click Load unpacked and choose the prepared extension folder. Open Having Trouble? for the file-picker shortcut.", "اضغط «تحميل إضافة غير مضغوطة» واختر مجلد الإضافة المجهز. افتح «هل تواجه مشكلة؟» لمعرفة اختصار اختيار المجلد.").into());
         }
-        d.set_notice(text("Keep the prepared folder in its current location. Ezoo Download will update it for you.", "اترك المجلد المجهز في مكانه الحالي؛ سيحدّثه Ezoo Download تلقائيًا.").into());
+        d.set_notice(text("Keep the prepared folder in its current location. Mac Downloader will update it for you.", "اترك المجلد المجهز في مكانه الحالي؛ سيحدّثه Mac Downloader تلقائيًا.").into());
         d.set_fallback(file_picker_help(false).into());
     }
     refresh_connection(ui);
@@ -248,14 +248,14 @@ fn refresh_connection(ui: &Ui) {
         d.set_setup_action(text("Open Browser…", "افتح المتصفح…").into());
         let enabled = status.is_some_and(|s| s.enabled);
         d.set_connection_title(text(if enabled { "Connected" } else { "Connected · Downloads Paused" }, if enabled { "متصل" } else { "متصل · التنزيلات متوقفة مؤقتًا" }).into());
-        d.set_connection_detail(text(if enabled { "The extension is communicating with Ezoo Download. Setup is complete." } else { "Turn the extension on from its browser popup when you want it to handle downloads." }, if enabled { "الإضافة تتواصل مع Ezoo Download. اكتمل الإعداد." } else { "شغّل الإضافة من نافذتها في المتصفح عندما تريد استخدامها للتنزيلات." }).into());
+        d.set_connection_detail(text(if enabled { "The extension is communicating with Mac Downloader. Setup is complete." } else { "Turn the extension on from its browser popup when you want it to handle downloads." }, if enabled { "الإضافة تتواصل مع Mac Downloader. اكتمل الإعداد." } else { "شغّل الإضافة من نافذتها في المتصفح عندما تريد استخدامها للتنزيلات." }).into());
     } else if status.is_some() {
         d.set_connection_title(text("Extension Update Needed", "الإضافة تحتاج إلى تحديث").into());
-        d.set_connection_detail(text("Reopen the extensions page and click Reload for Ezoo Download, then open its popup once.", "أعد فتح صفحة الإضافات واضغط «إعادة تحميل» لإضافة Ezoo Download ثم افتح نافذتها مرة واحدة.").into());
+        d.set_connection_detail(text("Reopen the extensions page and click Reload for Mac Downloader, then open its popup once.", "أعد فتح صفحة الإضافات واضغط «إعادة تحميل» لإضافة Mac Downloader ثم افتح نافذتها مرة واحدة.").into());
     } else {
         d.set_setup_action(text(if d.get_prepared() { "Open Setup Again…" } else { "Start Setup…" }, if d.get_prepared() { "افتح الإعداد مجددًا…" } else { "ابدأ الإعداد…" }).into());
         d.set_connection_title(text(if d.get_prepared() { "Waiting for Your Browser" } else { "Not Connected Yet" }, if d.get_prepared() { "في انتظار المتصفح" } else { "لم يتم الاتصال بعد" }).into());
-        d.set_connection_detail(text(if d.get_prepared() { "Complete the browser steps above. If it is already installed, open the Ezoo Download extension popup once." } else { "Start setup to prepare the extension and open the right browser page." }, if d.get_prepared() { "أكمل الخطوات أعلاه في المتصفح. إذا كانت الإضافة مثبتة، افتح نافذة إضافة Ezoo Download مرة واحدة." } else { "ابدأ الإعداد لتجهيز الإضافة وفتح الصفحة المناسبة في المتصفح." }).into());
+        d.set_connection_detail(text(if d.get_prepared() { "Complete the browser steps above. If it is already installed, open the Mac Downloader extension popup once." } else { "Start setup to prepare the extension and open the right browser page." }, if d.get_prepared() { "أكمل الخطوات أعلاه في المتصفح. إذا كانت الإضافة مثبتة، افتح نافذة إضافة Mac Downloader مرة واحدة." } else { "ابدأ الإعداد لتجهيز الإضافة وفتح الصفحة المناسبة في المتصفح." }).into());
     }
 }
 
@@ -293,7 +293,7 @@ fn show_error(ui: &Ui, error: anyhow::Error) {
     SETUP_ERROR.with(|error| error.set(true));
     if let Some(d) = ui.browsers.upgrade() {
         d.set_connection_title(text("Setup Could Not Finish", "تعذّر إكمال الإعداد").into());
-        d.set_connection_detail(format!("{} {error}", text("Try again, or reinstall the latest Ezoo Download release.", "حاول مجددًا أو أعد تثبيت أحدث إصدار من Ezoo Download.")).into());
+        d.set_connection_detail(format!("{} {error}", text("Try again, or reinstall the latest Mac Downloader release.", "حاول مجددًا أو أعد تثبيت أحدث إصدار من Mac Downloader.")).into());
     }
 }
 

@@ -1,4 +1,4 @@
-//! New versions of Ezoo Download from GitHub, always on: right after the
+//! New versions of Mac Downloader from GitHub, always on: right after the
 //! program opens it looks for a newer release; when there is one it is
 //! downloaded, checked (signature of the release + SHA-256) and installed silently, and the program
 //! starts again by itself. While the program stays open it looks again every
@@ -186,7 +186,7 @@ pub fn check_now(ui: &Ui) {
                 return finish(&shared);
             }
             Ok(None) => {
-                tell(&shared, 1, t("Ezoo Download is up to date"), tf("Version {} is the newest version.", &[&selfupdate::current()]), -1.0);
+                tell(&shared, 1, t("Mac Downloader is up to date"), tf("Version {} is the newest version.", &[&selfupdate::current()]), -1.0);
                 return finish(&shared);
             }
             Ok(Some(rel)) => rel,
@@ -217,7 +217,7 @@ pub fn check_now(ui: &Ui) {
                     &shared,
                     3,
                     tf("Installing version {}…", &[&rel.version]),
-                    t("Ezoo Download closes now and opens again when it is installed."),
+                    t("Mac Downloader closes now and opens again when it is installed."),
                     -1.0,
                 );
                 // a moment to read it, then the setup runs in front of the user

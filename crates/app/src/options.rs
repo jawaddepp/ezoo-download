@@ -59,7 +59,7 @@ fn fill(ui: &Ui, d: &SettingsDialog, s: &Settings) {
     d.set_bg_strength(s.background_strength.clamp(10, 80) as f32);
     d.set_start_with_windows(autostart::is_enabled());
     if cfg!(target_os = "macos") {
-        d.set_startup_label(t("Launch Ezoo Download when I sign in").into());
+        d.set_startup_label(t("Launch Mac Downloader when I sign in").into());
     }
     d.set_windows_features(cfg!(windows));
     d.set_close_to_tray(s.close_to_tray);
@@ -465,7 +465,7 @@ pub(crate) fn wire(ui: &Ui) {
                     let _ = d.hide();
                     refresh(&ui2);
                     if port_changed {
-                        message(&t("Restart Ezoo Download to use the new port. Set the same port in the browser extension."));
+                        message(&t("Restart Mac Downloader to use the new port. Set the same port in the browser extension."));
                     }
                 }
                 Err(msg) => d.set_message(msg.into()),

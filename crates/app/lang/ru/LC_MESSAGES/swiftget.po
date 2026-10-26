@@ -124,8 +124,8 @@ msgstr "Удалить категорию"
 msgid "Properties…"
 msgstr "Свойства…"
 
-msgid "Ezoo Download"
-msgstr "Ezoo Download"
+msgid "Mac Downloader"
+msgstr "Mac Downloader"
 
 msgid "File Name"
 msgstr "Имя файла"
@@ -262,8 +262,8 @@ msgstr "Спящий режим"
 msgid "Hibernate"
 msgstr "Гибернация"
 
-msgid "Exit Ezoo Download"
-msgstr "Выйти из Ezoo Download"
+msgid "Exit Mac Downloader"
+msgstr "Выйти из Mac Downloader"
 
 msgid "Scheduler…"
 msgstr "Планировщик…"
@@ -346,8 +346,8 @@ msgstr "Оформление…"
 msgid "Help"
 msgstr "Справка"
 
-msgid "Add Ezoo Download to my browser…"
-msgstr "Добавить Ezoo Download в мой браузер…"
+msgid "Add Mac Downloader to my browser…"
+msgstr "Добавить Mac Downloader в мой браузер…"
 
 msgid "Tip of the day…"
 msgstr "Совет дня…"
@@ -358,8 +358,8 @@ msgstr "Проверить обновления"
 msgid "Check for updates (video downloader)"
 msgstr "Проверить обновления (загрузчик видео)"
 
-msgid "About Ezoo Download"
-msgstr "О программе Ezoo Download"
+msgid "About Mac Downloader"
+msgstr "О программе Mac Downloader"
 
 msgid "Add URL"
 msgstr "Добавить URL"
@@ -736,8 +736,8 @@ msgstr "Запомнить мой выбор (Параметры > Загруз�
 msgid "All downloads are finished."
 msgstr "Все загрузки завершены."
 
-msgid "Ezoo Download will {} in {} seconds."
-msgstr "Ezoo Download: {} через {} с."
+msgid "Mac Downloader will {} in {} seconds."
+msgstr "Mac Downloader: {} через {} с."
 
 msgid "Now"
 msgstr "Сейчас"
@@ -784,8 +784,8 @@ msgstr "Сб"
 msgid "Sun"
 msgstr "Вс"
 
-msgid "Start the queue when Ezoo Download starts"
-msgstr "Запускать очередь при запуске Ezoo Download"
+msgid "Start the queue when Mac Downloader starts"
+msgstr "Запускать очередь при запуске Mac Downloader"
 
 msgid "Stop the queue at"
 msgstr "Остановить очередь в"
@@ -946,8 +946,8 @@ msgstr "Следующий совет"
 msgid "Refresh download address"
 msgstr "Обновить адрес загрузки"
 
-msgid "1. Open the web page where you got this file.\n2. Click the download link there again (or start the video).\n3. Ezoo Download takes the new address and continues from where it stopped."
-msgstr "1. Откройте веб-страницу, откуда вы получили этот файл.\n2. Снова нажмите там ссылку для скачивания (или запустите видео).\n3. Ezoo Download возьмёт новый адрес и продолжит с того места, где остановился."
+msgid "1. Open the web page where you got this file.\n2. Click the download link there again (or start the video).\n3. Mac Downloader takes the new address and continues from where it stopped."
+msgstr "1. Откройте веб-страницу, откуда вы получили этот файл.\n2. Снова нажмите там ссылку для скачивания (или запустите видео).\n3. Mac Downloader возьмёт новый адрес и продолжит с того места, где остановился."
 
 msgid "Open the page"
 msgstr "Открыть страницу"
@@ -970,8 +970,8 @@ msgstr "Не ждать"
 msgid "Play"
 msgstr "Воспроизвести"
 
-msgid "Ezoo Download – Options"
-msgstr "Ezoo Download – Параметры"
+msgid "Mac Downloader – Options"
+msgstr "Mac Downloader – Параметры"
 
 msgid "General"
 msgstr "Общие"
@@ -1021,8 +1021,8 @@ msgstr "Обзор…"
 msgid "Picture visibility"
 msgstr "Видимость изображения"
 
-msgid "Launch Ezoo Download on Windows startup"
-msgstr "Запускать Ezoo Download вместе с Windows"
+msgid "Launch Mac Downloader on Windows startup"
+msgstr "Запускать Mac Downloader вместе с Windows"
 
 msgid "Keep running next to the clock when the window is closed"
 msgstr "Оставаться рядом с часами при закрытии окна"
@@ -1048,8 +1048,8 @@ msgstr "Показать свойства"
 msgid "Browser integration"
 msgstr "Интеграция с браузером"
 
-msgid "Chrome and Edge: load the \"extension\" folder in chrome://extensions (Developer mode > Load unpacked). Downloads, videos and the right click menu then go to Ezoo Download."
-msgstr "Chrome и Edge: загрузите папку \"extension\" в chrome://extensions (Режим разработчика > Загрузить распакованное расширение). Тогда загрузки, видео и меню правого щелчка пойдут в Ezoo Download."
+msgid "Chrome and Edge: load the \"extension\" folder in chrome://extensions (Developer mode > Load unpacked). Downloads, videos and the right click menu then go to Mac Downloader."
+msgstr "Chrome и Edge: загрузите папку \"extension\" в chrome://extensions (Режим разработчика > Загрузить распакованное расширение). Тогда загрузки, видео и меню правого щелчка пойдут в Mac Downloader."
 
 msgid "Hold this key to let the browser download by itself"
 msgstr "Удерживайте эту клавишу, чтобы браузер скачивал сам"
@@ -1066,8 +1066,8 @@ msgstr "Shift"
 msgid "None"
 msgstr "Нет"
 
-msgid "Hold this key to force Ezoo Download to take a link"
-msgstr "Удерживайте эту клавишу, чтобы Ezoo Download обязательно взял ссылку"
+msgid "Hold this key to force Mac Downloader to take a link"
+msgstr "Удерживайте эту клавишу, чтобы Mac Downloader обязательно взял ссылку"
 
 msgid "Browser extension port"
 msgstr "Порт расширения браузера"
@@ -1279,8 +1279,8 @@ msgstr "Файлы .wav. Пусто = без звука для этого соб
 msgid "Turn the speed limiter on"
 msgstr "Включить ограничитель скорости"
 
-msgid "Always turn on the speed limiter when Ezoo Download starts"
-msgstr "Всегда включать ограничитель при запуске Ezoo Download"
+msgid "Always turn on the speed limiter when Mac Downloader starts"
+msgstr "Всегда включать ограничитель при запуске Mac Downloader"
 
 msgid "Every download can also have its own limit: its progress window > Speed Limiter tab."
 msgstr "У каждой загрузки может быть свой лимит: её окно хода загрузки > вкладка «Ограничитель скорости»."
@@ -1381,8 +1381,8 @@ msgstr "Нумеровать файлы"
 msgid "Not installed on this computer"
 msgstr "Не установлен на этом компьютере"
 
-msgid "Add Ezoo Download to your browser"
-msgstr "Добавьте Ezoo Download в браузер"
+msgid "Add Mac Downloader to your browser"
+msgstr "Добавьте Mac Downloader в браузер"
 
 msgid "Click your browser:"
 msgstr "Нажмите на свой браузер:"
@@ -1399,17 +1399,17 @@ msgstr "Версия {}"
 msgid "Coded by Ahmed Ezzat"
 msgstr "Автор: Ahmed Ezzat"
 
-msgid "Like Ezoo Download? You can support its development:"
-msgstr "Нравится Ezoo Download? Вы можете поддержать разработку:"
+msgid "Like Mac Downloader? You can support its development:"
+msgstr "Нравится Mac Downloader? Вы можете поддержать разработку:"
 
 msgid "Support with PayPal"
 msgstr "Поддержать через PayPal"
 
-msgid "What's new in Ezoo Download"
-msgstr "Что нового в Ezoo Download"
+msgid "What's new in Mac Downloader"
+msgstr "Что нового в Mac Downloader"
 
-msgid "Ezoo Download is free and has no ads. If it helps you and you would like to support its development, you can send a gift with PayPal. Thank you!"
-msgstr "Ezoo Download бесплатный и без рекламы. Если он вам полезен и вы хотите поддержать его развитие, можно отправить пожертвование через PayPal. Спасибо!"
+msgid "Mac Downloader is free and has no ads. If it helps you and you would like to support its development, you can send a gift with PayPal. Thank you!"
+msgstr "Mac Downloader бесплатный и без рекламы. Если он вам полезен и вы хотите поддержать его развитие, можно отправить пожертвование через PayPal. Спасибо!"
 
 msgid "Hide"
 msgstr "Скрыть"

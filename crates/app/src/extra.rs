@@ -125,7 +125,7 @@ pub(crate) fn delete_category(ui: &Ui, name: &str) {
     let mut s = ui.ctx.mgr.settings();
     let Some(c) = s.categories.iter().find(|c| c.name == name) else { return };
     if c.builtin || name == "General" {
-        message(&t("This category comes with Ezoo Download and can't be deleted (you can change its file types in Properties)."));
+        message(&t("This category comes with Mac Downloader and can't be deleted (you can change its file types in Properties)."));
         return;
     }
     if !ask(&tf("Delete the category “{}”?\nIts files stay where they are and move to their file type's category.", &[&name])) {
@@ -378,9 +378,9 @@ pub(crate) fn whats_new(ui: &Ui) {
     crate::set_theme_of(d.global::<Theme>(), &crate::Look::of(&ui.ctx.mgr.settings()));
     d.set_rtl(crate::i18n::is_arabic());
     let heading = if cfg!(windows) {
-        "Ezoo Download was updated to version {} by itself."
+        "Mac Downloader was updated to version {} by itself."
     } else {
-        "Ezoo Download version {}."
+        "Mac Downloader version {}."
     };
     d.set_heading(tf(heading, &[&env!("CARGO_PKG_VERSION")]).into());
     let items: Vec<SharedString> = WHATS_NEW.iter().map(|l| t(l).into()).collect();
@@ -403,9 +403,9 @@ pub(crate) fn whats_new(ui: &Ui) {
 }
 
 const TIPS: [&str; 14] = [
-    "Copy a download link anywhere (Ctrl+C) and Ezoo Download offers to download it.",
+    "Copy a download link anywhere (Ctrl+C) and Mac Downloader offers to download it.",
     "Play a video on a web page and click \"Download this video\" above it to choose the quality.",
-    "Right click a web page in Chrome or Edge and choose \"Download all links with Ezoo Download\" to pick files from the page.",
+    "Right click a web page in Chrome or Edge and choose \"Download all links with Mac Downloader\" to pick files from the page.",
     "Every download uses up to 32 connections. If a server is slow with many, add it to Options > Connection > Exceptions.",
     "Make a queue (Queues > New queue) and set \"1 file at the same time\" to download files one after another.",
     "The Scheduler can start a queue at night and shut down the computer when everything is finished.",
