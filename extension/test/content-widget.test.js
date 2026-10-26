@@ -7,7 +7,7 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
 
 function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true } = {}) {
-  const events = new Map(), intervals = new Map(), timeouts = [], messages = [], storageListeners = [], runtimeListeners = [];
+  const events = new Map(), intervals = new Map(), timeouts = [], frames = [], messages = [], storageListeners = [], runtimeListeners = [];
   let document;
   const addGlobal = (type, fn) => { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); };
   const emitGlobal = (type, e = {}) => { for (const fn of [...(events.get(type) || [])]) fn(event(e)); };
@@ -93,6 +93,7 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
   };
   const ctx = { document, chrome, location: new URL(url), innerWidth: 1000, innerHeight: 720, URL, console,
     addEventListener: addGlobal, removeEventListener(type, fn) { events.get(type)?.delete(fn); },
+    requestAnimationFrame(fn) { frames.push(fn); return frames.length; },
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn, ms) { if (!intervals.has(ms)) intervals.set(ms, []); intervals.get(ms).push(fn); return fn; },
     clearInterval(fn) { for (const [ms, list] of intervals) intervals.set(ms, list.filter(f => f !== fn)); },
@@ -107,7 +108,10 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
     change(change) { for (const fn of storageListeners) fn(change, 'local'); },
     tick(ms) { for (const fn of intervals.get(ms) || []) fn(); },
     flush() { while (timeouts.length) timeouts.shift()(); },
-    global: emitGlobal,
+    global(type, data) { emitGlobal(type, data); for (const frame of frames.splice(0)) frame(); },
+    globalWithoutFrame: emitGlobal,
+    flushFrame() { for (const frame of frames.splice(0)) frame(); },
+    pendingFrames() { return frames.length; },
   };
 }
 function formats() {
@@ -189,6 +193,32 @@ function formats() {
   f.document.fullscreenElement = null; f.global('resize'); assert.equal(host.style.display, 'block', 'exiting fullscreen restores the control');
   f.ctx.innerWidth = 32;
   f.global('resize'); assert.equal(host.style.display, 'none', 'very tiny viewports do not expose an offscreen control');
+}
+{
+  const f = fixture(), host = f.hosts()[0];
+  let hitTests = 0;
+  f.document.elementsFromPoint = () => { hitTests++; return []; };
+  for (let i = 0; i < 20; i++) {
+    f.video.rect = { left: 100, top: 181 + i, right: 640, bottom: 541 + i, width: 540, height: 360 };
+    f.globalWithoutFrame(i % 2 ? 'resize' : 'scroll');
+  }
+  assert.equal(f.pendingFrames(), 1, 'a burst schedules only one placement frame');
+  assert.equal(hitTests, 0, 'scroll events do not synchronously repeat hit testing');
+  f.flushFrame();
+  assert(hitTests > 0 && hitTests <= 8, 'one frame performs one bounded placement pass');
+  assert.equal(host.style.top, '150px', 'the frame uses the most recent player geometry');
+  assert.equal(host.style.left, '590px');
+  assert.equal(f.pendingFrames(), 0);
+
+  f.globalWithoutFrame('scroll');
+  f.document.fullscreenElement = f.document.documentElement;
+  f.document.emit('fullscreenchange');
+  assert.equal(host.style.display, 'none', 'fullscreen hides immediately even with a frame pending');
+  f.flushFrame();
+  assert.equal(host.style.display, 'none', 'the pending frame cannot reveal a fullscreen widget');
+  f.document.fullscreenElement = null;
+  f.document.emit('fullscreenchange');
+  assert.equal(host.style.display, 'block', 'the widget returns immediately on fullscreen exit');
 }
 {
   const f = fixture(), host = f.hosts()[0];

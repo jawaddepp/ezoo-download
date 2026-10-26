@@ -1003,7 +1003,19 @@
     });
   }
 
-  const viewportChanged = () => { placementEpoch++; place(); };
+  // Scroll/resize events can arrive in bursts, including from nested page
+  // scrollers. Recheck placement at most once per paint using the newest
+  // geometry; fullscreen events above still hide controls immediately.
+  let viewportFramePending = false;
+  const viewportChanged = () => {
+    placementEpoch++;
+    if (viewportFramePending) return;
+    viewportFramePending = true;
+    requestAnimationFrame(() => {
+      viewportFramePending = false;
+      place();
+    });
+  };
   addEventListener("scroll", viewportChanged, { passive: true, capture: true });
   addEventListener("resize", viewportChanged, { passive: true });
   setInterval(place, 700);
