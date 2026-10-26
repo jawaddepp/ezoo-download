@@ -165,6 +165,9 @@
   // other video is looked up when its bubble is clicked. A bubble can be
   // dragged around its player and stays there while it remains visible.
   const bubbles = new Map(); // video -> bubble
+  // Scroll and resize invalidate cached hit tests; the existing placement
+  // timer refreshes them occasionally for page changes without new polling.
+  let placementEpoch = 0;
   function removeAll() {
     for (const b of bubbles.values()) releaseBubble(b);
     bubbles.clear();
@@ -695,13 +698,49 @@
     finish();
   }
 
+  // Page content is untrusted. Only use fixed selectors for landmarks and
+  // interactive/media elements, and never interpret attributes as code.
+  const OCCUPIED = 'header, nav, aside, [role="banner"], [role="navigation"], [role="complementary"], [role="region"], [role="list"], [role="listitem"], a[href], button, input, select, textarea, [role="button"], [role="link"], h1, h2, h3, h4, h5, h6, p, img, svg, video, audio, iframe, canvas, [contenteditable="true"]';
+
+  function intersects(rect, x, y, w, h) {
+    return (rect.right == null || rect.right > x) && (rect.left == null || rect.left < x + w) &&
+      rect.bottom > y && rect.top < y + h;
+  }
+
+  function clearOutside(b, x, y, w, h) {
+    if (x < 4 || y < 4 || x + w > innerWidth - 4 || y + h > innerHeight - 4) return false;
+    if (typeof document.elementsFromPoint !== "function") return true;
+    const points = [[x + w / 2, y + h / 2], [x + 2, y + 2], [x + w - 2, y + h - 2]];
+    for (const [px, py] of points) {
+      for (const element of document.elementsFromPoint(px, py)) {
+        if (element === b.host || element === b.video || element === document.documentElement || element === document.body) continue;
+        const blocker = element.closest?.(OCCUPIED);
+        if (!blocker || blocker === b.host || blocker === b.video || blocker.contains?.(b.video) || blocker.contains?.(b.host)) continue;
+        if (intersects(blocker.getBoundingClientRect(), x, y, w, h)) return false;
+      }
+    }
+    return true;
+  }
+
+  function pageHeaderBottom(x) {
+    if (typeof document.elementsFromPoint !== "function") return 0;
+    let bottom = 0;
+    for (const element of document.elementsFromPoint(Math.max(0, Math.min(innerWidth - 1, x)), 4)) {
+      const header = element.closest?.('header, nav, [role="banner"], [role="navigation"]');
+      if (!header) continue;
+      const rect = header.getBoundingClientRect();
+      if (rect.top <= 4 && rect.bottom > 0 && rect.bottom < innerHeight / 2) bottom = Math.max(bottom, rect.bottom);
+    }
+    return bottom;
+  }
+
   function placeOne(b) {
     const fs = document.fullscreenElement || document.webkitFullscreenElement;
     const r = b.video.getBoundingClientRect();
     const onScreen =
       r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth &&
       r.width >= 200 && r.height >= 100 && b.video.isConnected && innerWidth >= 36 && innerHeight >= 36 &&
-      !(fs && fs.tagName === "VIDEO") && (!fs || fs.contains(b.video) || fs.shadowRoot);
+      !fs && !b.video.webkitDisplayingFullscreen;
     b.host.style.display = onScreen ? "block" : "none";
     if (!onScreen) return;
     if (b.host.parentNode !== layer()) layer().appendChild(b.host);
@@ -710,55 +749,80 @@
     b.host.style.setProperty("--z", String(b.actualZoom));
     const w = b.host.getBoundingClientRect().width || 42 * b.actualZoom;
     const h = b.root.getElementById("main").getBoundingClientRect().height || 42 * b.actualZoom;
-    const rightGutter = !fs && r.right >= 0 && r.right + w + 12 <= innerWidth;
-    const leftGutter = !fs && r.left <= innerWidth && r.left - w - 12 >= 0;
-    // Prefer the gutter beside a player; fullscreen and edge-to-edge videos
-    // keep the button inside their own frame instead of over page navigation.
-    const defaultX = rightGutter ? r.right + 8 : leftGutter ? r.left - w - 8 : r.right - w - 8;
-    const minX = leftGutter ? r.left - w - 8 : r.left;
-    const maxX = rightGutter ? r.right + 8 : r.right - w;
-    const minY = r.top + 4, maxY = Math.max(minY, r.bottom - h - 4);
-    const x = Math.max(minX, Math.min(b.dx == null ? defaultX : r.left + b.dx, Math.max(minX, maxX)));
-    let y = Math.max(minY, Math.min(b.dy == null ? r.top + 8 : r.top + b.dy, maxY));
-    const visibleX = Math.max(4, Math.min(x, innerWidth - w - 4));
-    // If the original anchor scrolls away, keep the control alongside the
-    // visible part of the video while reserving space for page navigation.
-    if (y < 4 || y + h > innerHeight - 4) {
-      let safeTop = Math.min(72, Math.max(4, innerHeight - h - 4));
-      if (typeof document.elementsFromPoint === "function") {
-        for (const px of [visibleX + w / 2, innerWidth / 2]) {
-          for (const element of document.elementsFromPoint(Math.max(0, Math.min(innerWidth - 1, px)), 4)) {
-            const header = element.closest?.('header, nav, [role="banner"], [role="navigation"]');
-            if (!header) continue;
-            const bounds = header.getBoundingClientRect();
-            if (bounds.top <= 4 && bounds.bottom > 0 && bounds.bottom < innerHeight / 2) safeTop = Math.max(safeTop, bounds.bottom + 8);
-          }
-        }
+    const visibleWidth = Math.min(innerWidth, r.right) - Math.max(0, r.left);
+    if (visibleWidth < Math.min(w, 42)) { b.host.style.display = "none"; return; }
+    const geometry = [r.left, r.top, r.right, r.bottom, innerWidth, innerHeight, w, h, b.dx, b.dy].join("/");
+    let chosen;
+    const age = b.placement ? Date.now() - b.placement.time : -1;
+    if (b.placement && b.placement.geometry === geometry && b.placement.epoch === placementEpoch && age >= 0 && age < 2800) {
+      chosen = b.placement.slot;
+    } else {
+      // Above is preferred; side gutters are a fallback only when the
+      // candidate is truly outside the player, visible, and unobstructed.
+      const minAboveX = Math.max(4, r.left + 4);
+      const maxAboveX = Math.min(innerWidth - w - 4, r.right - w - 4);
+      const aboveX = Math.max(minAboveX, Math.min(b.dx == null ? r.right - w - 8 : r.left + b.dx, maxAboveX));
+      const above = maxAboveX >= minAboveX ? { name: "above", x: aboveX, y: r.top - h - 8 } : null;
+      const side = (name, x) => {
+        if (x < 4 || x + w > innerWidth - 4) return null;
+        const headerBottom = pageHeaderBottom(x + w / 2);
+        const visibleBottom = Math.min(innerHeight - 4, r.bottom - 4);
+        const defaultTop = r.top < 0 ? Math.min(72, Math.max(4, visibleBottom - h)) : 4;
+        const visibleTop = Math.max(4, r.top + 4, headerBottom ? headerBottom + 8 : defaultTop);
+        if (visibleTop + h > visibleBottom) return null;
+        const y = Math.max(visibleTop, Math.min(b.dy == null ? r.top + 8 : r.top + b.dy, visibleBottom - h));
+        return { name, x, y };
+      };
+      const candidates = [above, side("right", r.right + 8), side("left", r.left - w - 8)].filter(Boolean);
+      // Recheck the last safe slot first when page geometry is unchanged so
+      // periodic media updates cannot make the control hop between gutters.
+      if (b.placement?.geometry === geometry && b.placement.slot) {
+        const index = candidates.findIndex((candidate) => candidate.name === b.placement.slot.name);
+        if (index > 0) candidates.unshift(...candidates.splice(index, 1));
       }
-      const visibleTop = Math.max(4, r.top + 4, safeTop);
-      const visibleBottom = Math.min(innerHeight - 4, r.bottom - 4);
-      if (visibleTop + h > visibleBottom) { b.host.style.display = "none"; return; }
-      y = Math.max(visibleTop, Math.min(y, visibleBottom - h));
+      chosen = candidates.find((candidate) => clearOutside(b, candidate.x, candidate.y, w, h)) || null;
+      b.placement = { geometry, epoch: placementEpoch, time: Date.now(), slot: chosen };
     }
-    b.host.style.left = `${visibleX}px`;
-    b.host.style.top = `${y}px`;
+    if (!chosen) { b.host.style.display = "none"; return; }
+    b.host.style.left = `${chosen.x}px`;
+    b.host.style.top = `${chosen.y}px`;
     if (b.open) {
       const box = b.root.getElementById("list");
       const content = b.root.getElementById("list-content");
       box.style.maxWidth = `${Math.max(1, (innerWidth - 16) / b.actualZoom)}px`;
       const hr = b.host.getBoundingClientRect();
+      const width = box.getBoundingClientRect().width;
+      const wanted = Math.min(440 * b.actualZoom, content.scrollHeight * b.actualZoom + 2 * b.actualZoom);
+      const alignedX = Math.max(4, Math.min(hr.right - width, innerWidth - width - 4));
+      const external = [];
+      // Prefer room above the trigger, then either side of the player. A
+      // bounded shorter menu remains scrollable if the available room is small.
+      const spaceAbove = hr.top - 12;
+      if (spaceAbove >= Math.min(wanted, 120) && hr.top <= r.top) {
+        const height = Math.min(wanted, spaceAbove);
+        external.push({ x: alignedX, y: hr.top - 8 - height, height });
+      }
+      for (const x of [r.right + 8, r.left - width - 8]) {
+        if (x < 4 || x + width > innerWidth - 4) continue;
+        const anchorInside = hr.left < x + width && hr.right > x;
+        const top = anchorInside ? hr.bottom + 8 : Math.max(4, Math.min(r.top, innerHeight - 4));
+        const available = innerHeight - 4 - top;
+        if (available >= Math.min(wanted, 120)) external.push({ x, y: top, height: Math.min(wanted, available) });
+      }
+      const outside = external.find((candidate) => clearOutside(b, candidate.x, candidate.y, width, candidate.height));
       const below = Math.max(0, innerHeight - hr.bottom - 12), above = Math.max(0, hr.top - 12);
-      const aboveMenu = below < Math.min(content.scrollHeight * b.actualZoom, 300) && above > below;
-      box.classList.toggle("above", aboveMenu);
-      const maxHeight = Math.max(1, Math.min(440, (aboveMenu ? above : below) / b.actualZoom));
+      const aboveMenu = below < Math.min(wanted, 300) && above > below;
+      const height = outside ? outside.height : Math.min(wanted, aboveMenu ? above : below);
+      const menuLeft = outside ? outside.x : alignedX;
+      const menuTop = outside ? outside.y : aboveMenu ? hr.top - 8 - height : hr.bottom + 8;
+      const maxHeight = Math.max(1, height / b.actualZoom);
       box.style.maxHeight = `${maxHeight}px`;
       content.style.maxHeight = `${Math.max(0, maxHeight - 2)}px`;
-      // Anchor to the button but keep the entire menu in the viewport even
-      // when the player sits near the middle of a narrow browser window.
-      const width = box.getBoundingClientRect().width;
-      const menuLeft = Math.max(4, Math.min(hr.right - width, innerWidth - width - 4));
+      box.classList.remove("above");
       box.style.right = "auto";
       box.style.left = `${(menuLeft - hr.left) / b.actualZoom}px`;
+      box.style.bottom = "auto";
+      box.style.top = `${(menuTop - hr.top) / b.actualZoom}px`;
     }
   }
 
@@ -863,7 +927,14 @@
     }
   });
   for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
-    document.addEventListener(ev, () => setTimeout(() => bubbles.forEach((b) => placeOne(b)), 50));
+    document.addEventListener(ev, () => {
+      placementEpoch++;
+      bubbles.forEach((b) => placeOne(b));
+      setTimeout(() => bubbles.forEach((b) => placeOne(b)), 50);
+    });
+  }
+  for (const ev of ["webkitbeginfullscreen", "webkitendfullscreen"]) {
+    document.addEventListener(ev, () => { placementEpoch++; setTimeout(() => bubbles.forEach((b) => placeOne(b)), 50); }, true);
   }
 
   // every link of the page (or the selection) for "Download all links"
@@ -932,8 +1003,9 @@
     });
   }
 
-  addEventListener("scroll", place, { passive: true, capture: true });
-  addEventListener("resize", place, { passive: true });
+  const viewportChanged = () => { placementEpoch++; place(); };
+  addEventListener("scroll", viewportChanged, { passive: true, capture: true });
+  addEventListener("resize", viewportChanged, { passive: true });
   setInterval(place, 700);
   setInterval(watchVideos, 1500);
   document.addEventListener("play", () => setTimeout(() => (watchVideos(), place()), 300), true);

@@ -155,12 +155,12 @@ function formats() {
 }
 {
   const f = fixture(); const host = f.hosts()[0], root = f.root(), trigger = root.getElementById('grab');
-  assert.equal(host.style.left, '748px', 'the default button sits beside the player when there is room');
-  assert.equal(host.style.top, '88px');
-  trigger.emit('mousedown', { clientX: 758, clientY: 98 });
-  f.global('mousemove', { clientX: 400, clientY: 0 }); f.global('mouseup');
-  assert.equal(host.style.top, '84px', 'dragging cannot place the button in the page header');
-  assert(Number.parseFloat(host.style.left) >= 100 && Number.parseFloat(host.style.left) <= 748);
+  assert.equal(host.style.left, '690px', 'the default button is aligned above the player');
+  assert(Number.parseFloat(host.style.top) + 42 <= 80, 'button stays outside the video');
+  trigger.emit('mousedown', { clientX: 700, clientY: 40 });
+  f.global('mousemove', { clientX: 400, clientY: 200 }); f.global('mouseup');
+  assert.equal(host.style.top, '30px', 'dragging remains in the outside lane above the player');
+  assert(Number.parseFloat(host.style.left) >= 104 && Number.parseFloat(host.style.left) + 42 <= 736);
   f.video.rect = { left: 100, top: -150, right: 740, bottom: 210, width: 640, height: 360 };
   f.global('scroll');
   assert.equal(host.style.display, 'block', 'a visible player keeps its control after the original anchor scrolls away');
@@ -170,6 +170,8 @@ function formats() {
   f.global('scroll'); assert.equal(host.style.top, '108px', 'a taller page header is kept clear');
   delete f.document.elementsFromPoint;
   f.video.rect = { left: 100, top: -310, right: 740, bottom: 50, width: 640, height: 360 };
+  f.global('scroll'); assert.equal(host.style.display, 'block', 'a narrow but sufficient visible player area remains usable');
+  f.video.rect = { left: 100, top: -325, right: 740, bottom: 35, width: 640, height: 360 };
   f.global('scroll'); assert.equal(host.style.display, 'none', 'the control hides when no safe player area remains');
   f.video.rect = { left: 100, top: 80, right: 740, bottom: 440, width: 640, height: 360 };
   f.global('scroll'); assert.equal(host.style.display, 'block');
@@ -178,9 +180,49 @@ function formats() {
   const f = fixture(), host = f.hosts()[0];
   f.video.rect = { left: 0, top: 80, right: 1000, bottom: 640, width: 1000, height: 560 };
   f.document.fullscreenElement = f.document.documentElement;
-  f.global('resize'); assert.equal(host.style.left, '950px', 'fullscreen stays inside the player');
-  f.document.fullscreenElement = null; f.ctx.innerWidth = 32;
+  f.global('resize'); assert.equal(host.style.display, 'none', 'fullscreen player containers hide the control');
+  f.document.fullscreenElement = f.video;
+  f.global('resize'); assert.equal(host.style.display, 'none', 'fullscreen video elements hide the control');
+  f.document.fullscreenElement = null; f.video.webkitDisplayingFullscreen = true;
+  f.global('resize'); assert.equal(host.style.display, 'none', 'native WebKit video fullscreen hides the control');
+  f.video.webkitDisplayingFullscreen = false;
+  f.document.fullscreenElement = null; f.global('resize'); assert.equal(host.style.display, 'block', 'exiting fullscreen restores the control');
+  f.ctx.innerWidth = 32;
   f.global('resize'); assert.equal(host.style.display, 'none', 'very tiny viewports do not expose an offscreen control');
+}
+{
+  const f = fixture(), host = f.hosts()[0];
+  const header = { getBoundingClientRect: () => ({ left: 0, right: 1000, top: 0, bottom: 100 }) };
+  const aside = { getBoundingClientRect: () => ({ left: 740, right: 1000, top: 100, bottom: 720 }) };
+  let queries = 0;
+  f.document.elementsFromPoint = (_x, y) => y < 100 ? [{ closest: () => header }] : [];
+  f.video.rect = { left: 100, top: 60, right: 740, bottom: 420, width: 640, height: 360 };
+  f.global('scroll');
+  assert.equal(host.style.left, '748px', 'a clear right gutter is used when the header blocks the space above');
+  assert(Number.parseFloat(host.style.top) >= 108, 'a side fallback stays below a fixed header');
+  f.document.elementsFromPoint = (x, y) => {
+    queries++;
+    const target = y < 100 ? header : x >= 740 ? aside : null;
+    return target ? [{ closest: () => target }] : [];
+  };
+  f.global('scroll');
+  assert.equal(host.style.left, '50px', 'an occupied right sidebar is avoided in favor of a clear left gutter');
+  assert(Number.parseFloat(host.style.top) >= 108, 'an on-screen but header-obscured anchor stays below the header');
+  const afterFirst = queries;
+  f.tick(700); f.tick(700); f.tick(700);
+  assert.equal(queries, afterFirst, 'unchanged placement does not repeat DOM hit tests every interval');
+  const leftAside = { getBoundingClientRect: () => ({ left: 0, right: 100, top: 100, bottom: 720 }) };
+  f.document.elementsFromPoint = (x, y) => {
+    const target = y < 100 ? header : x >= 740 ? aside : x <= 100 ? leftAside : null;
+    return target ? [{ closest: () => target }] : [];
+  };
+  f.global('scroll');
+  assert.equal(host.style.display, 'none', 'the widget hides instead of covering a header, sidebars, or video');
+}
+{
+  const f = fixture(), host = f.hosts()[0];
+  f.video.rect = { left: -620, top: 80, right: 20, bottom: 440, width: 640, height: 360 };
+  f.global('scroll'); assert.equal(host.style.display, 'none', 'a nearly offscreen player does not leave a detached widget');
 }
 {
   const f = fixture(), host = f.hosts()[0], root = f.root();
@@ -190,6 +232,18 @@ function formats() {
   const box = root.getElementById('list');
   const menuLeft = Number.parseFloat(host.style.left) + Number.parseFloat(box.style.left);
   assert(menuLeft >= 4 && menuLeft + 340 <= 396, 'menu stays inside a narrow viewport');
+}
+{
+  const f = fixture(), host = f.hosts()[0], root = f.root();
+  f.ctx.innerWidth = 1200;
+  f.video.rect = { left: 350, top: 200, right: 850, bottom: 600, width: 500, height: 400 };
+  f.global('resize'); root.getElementById('grab').emit('click', { detail: 0 });
+  const box = root.getElementById('list');
+  const menuLeft = Number.parseFloat(host.style.left) + Number.parseFloat(box.style.left);
+  const menuTop = Number.parseFloat(host.style.top) + Number.parseFloat(box.style.top);
+  const menuHeight = Number.parseFloat(box.style.maxHeight);
+  assert(menuLeft >= 850 || menuLeft + 340 <= 350 || menuTop + menuHeight <= 200 || menuTop >= 600,
+    'the menu stays outside the video when an external region fits it');
 }
 {
   const f = fixture(), root = f.root(), trigger = root.getElementById('grab');
