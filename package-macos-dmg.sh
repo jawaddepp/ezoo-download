@@ -9,7 +9,7 @@ command -v python3 >/dev/null || { echo "Install Python 3 to build the disk imag
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else "DMG packaging requires Python 3.10 or newer.")'
 app="$1"
 image="$2"
-[[ -x "$app/Contents/MacOS/EzooDownload" ]] || { echo "App bundle is missing: $app" >&2; exit 1; }
+[[ -x "$app/Contents/MacOS/MacDownloader" ]] || { echo "App bundle is missing: $app" >&2; exit 1; }
 [[ "$image" == *.dmg ]] || { echo "Output must end in .dmg" >&2; exit 1; }
 codesign --verify --deep --strict "$app"
 

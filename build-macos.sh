@@ -68,7 +68,7 @@ icon_work="$(mktemp -d "${TMPDIR:-/tmp}/ezoo-macos.XXXXXX")"
 trap 'rm -rf "$icon_work"' EXIT
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$binary" "$app/Contents/MacOS/EzooDownload"
+cp "$binary" "$app/Contents/MacOS/MacDownloader"
 cp THIRD-PARTY-NOTICES.txt "$app/Contents/Resources/"
 
 # Both browsers use the same source, with their own manifest. Resources
@@ -103,7 +103,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-    <key>CFBundleExecutable</key><string>EzooDownload</string>
+    <key>CFBundleExecutable</key><string>MacDownloader</string>
     <key>CFBundleIdentifier</key><string>com.ezoo.EzooDownload</string>
     <key>CFBundleName</key><string>Mac Downloader</string>
     <key>CFBundleDisplayName</key><string>Mac Downloader</string>

@@ -83,7 +83,7 @@ mod imp {
         let Some(macos) = executable.parent() else { return false };
         let Some(contents) = macos.parent() else { return false };
         let Some(bundle) = contents.parent() else { return false };
-        if executable.file_name().and_then(|s| s.to_str()) != Some("EzooDownload")
+        if executable.file_name().and_then(|s| s.to_str()) != Some("MacDownloader")
             || macos.file_name().and_then(|s| s.to_str()) != Some("MacOS")
             || contents.file_name().and_then(|s| s.to_str()) != Some("Contents")
             || bundle.file_name().and_then(|s| s.to_str()) != Some("Mac Downloader.app") {
@@ -137,7 +137,7 @@ mod imp {
             std::fs::create_dir_all(&dir).unwrap();
             let agent = dir.join("agent.plist");
             let old = dir.join("Ezoo Download.app/Contents/MacOS/EzooDownload");
-            let new = dir.join("Mac Downloader.app/Contents/MacOS/EzooDownload");
+            let new = dir.join("Mac Downloader.app/Contents/MacOS/MacDownloader");
             assert!(!refresh_at(&agent, &new));
             assert!(!agent.exists());
             std::fs::write(&agent, plist(&old)).unwrap();
