@@ -251,7 +251,7 @@ fn refresh_connection(ui: &Ui) {
         d.set_connection_detail(text(if enabled { "The extension is communicating with Mac Downloader. Setup is complete." } else { "Turn the extension on from its browser popup when you want it to handle downloads." }, if enabled { "الإضافة تتواصل مع Mac Downloader. اكتمل الإعداد." } else { "شغّل الإضافة من نافذتها في المتصفح عندما تريد استخدامها للتنزيلات." }).into());
     } else if status.is_some() {
         d.set_connection_title(text("Extension Update Needed", "الإضافة تحتاج إلى تحديث").into());
-        d.set_connection_detail(text("Reopen the extensions page and click Reload for Mac Downloader, then open its popup once.", "أعد فتح صفحة الإضافات واضغط «إعادة تحميل» لإضافة Mac Downloader ثم افتح نافذتها مرة واحدة.").into());
+        d.set_connection_detail(text("Reopen the extensions page and click Reload for this extension, then open its popup once.", "أعد فتح صفحة الإضافات واضغط «إعادة تحميل» لهذه الإضافة، ثم افتح نافذتها مرة واحدة.").into());
     } else {
         d.set_setup_action(text(if d.get_prepared() { "Open Setup Again…" } else { "Start Setup…" }, if d.get_prepared() { "افتح الإعداد مجددًا…" } else { "ابدأ الإعداد…" }).into());
         d.set_connection_title(text(if d.get_prepared() { "Waiting for Your Browser" } else { "Not Connected Yet" }, if d.get_prepared() { "في انتظار المتصفح" } else { "لم يتم الاتصال بعد" }).into());
