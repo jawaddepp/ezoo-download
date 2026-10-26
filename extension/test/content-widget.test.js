@@ -6,9 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
 
-function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true, topFrame = true, topFullscreen = false, topAvailable = true, deferFullscreen = false } = {}) {
+function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true, topFrame = true, topFullscreen = false, topAvailable = true, deferFullscreen = false, deferResolve = false, initialSource = 'https://cdn.example.test/clip.mp4', initialLink = '' } = {}) {
   const events = new Map(), intervals = new Map(), timeouts = [], frames = [], messages = [], storageListeners = [], runtimeListeners = [];
   const pendingFullscreen = [];
+  const pendingResolves = [];
   let reportedTopFullscreen = topFullscreen, reportedTopAvailable = topAvailable;
   let document;
   const addGlobal = (type, fn) => { if (!events.has(type)) events.set(type, new Set()); events.get(type).add(fn); };
@@ -21,6 +22,7 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
     if (selector === '*') return true;
     if (selector.startsWith('.')) return node.classList.contains(selector.slice(1));
     if (selector.startsWith('#')) return node.id === selector.slice(1);
+    if (selector === 'a[href]') return node.tagName === 'A' && !!node.href;
     return node.tagName.toLowerCase() === selector.toLowerCase();
   }
   class Element {
@@ -77,7 +79,9 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
   document.title = 'A safe <video> title'; document.fullscreenElement = null;
   document.createElement = tag => new Element(tag); document.createElementNS = (_, tag) => new Element(tag);
   document.querySelectorAll = selector => document.documentElement.querySelectorAll(selector);
-  const video = new Element('video'); Object.assign(video, { duration: 60, paused: false, ended: false, currentSrc: 'https://cdn.example.test/clip.mp4', src: '', tabIndex: 0 }); document.documentElement.appendChild(video);
+  const video = new Element('video'); Object.assign(video, { duration: 60, paused: false, ended: false, currentSrc: initialSource, src: '', tabIndex: 0 }); document.documentElement.appendChild(video);
+  let videoLink;
+  if (initialLink) { videoLink = new Element('a'); videoLink.href = initialLink; video.appendChild(videoLink); }
   const chrome = {
     storage: { local: { get(defaults, cb) { cb(defaults); } }, onChanged: { addListener(fn) { storageListeners.push(fn); } } },
     runtime: {
@@ -86,6 +90,9 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
       onMessage: { addListener(fn) { runtimeListeners.push(fn); } },
       sendMessage(message, cb) {
         messages.push(message);
+        if (message.type === 'swiftget-resolve-video' && deferResolve) {
+          pendingResolves.push(cb); return Promise.resolve();
+        }
         if (message.type === 'swiftget-query-top-fullscreen') {
           const answer = reportedTopAvailable ? { fullscreen: reportedTopFullscreen } : {};
           if (deferFullscreen) pendingFullscreen.push(() => cb?.(answer));
@@ -112,8 +119,16 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
   vm.runInNewContext(source, ctx, { filename: 'content.js' });
   const hosts = () => document.documentElement.children.filter(x => x._shadow);
   const root = () => hosts()[0]?._shadow;
-  return { ctx, video, document, messages, events, root, hosts,
-    send(message, sender = {}, reply = () => {}) { for (const fn of runtimeListeners) fn(message, sender, reply); },
+  return { ctx, video, videoLink, document, messages, events, root, hosts,
+    send(message, sender = {}, reply = () => {}) {
+      if (message.type === 'swiftget-media' && !Object.hasOwn(message, 'clientToken')) {
+        const last = [...messages].reverse().find(m => m.clientToken);
+        message = { ...message, clientToken: last?.clientToken };
+      }
+      for (const fn of runtimeListeners) fn(message, sender, reply);
+    },
+    resolveVideo(index, result) { pendingResolves[index]?.(result); },
+    pendingVideos() { return pendingResolves.length; },
     setTopFullscreen(value) { reportedTopFullscreen = value; },
     setTopAvailable(value) { reportedTopAvailable = value; },
     resolveFullscreen(index) { pendingFullscreen[index](); },
@@ -404,4 +419,188 @@ for (const url of ['https://notnetflix.com/watch/12345', 'https://netflix.com.ex
   const f = fixture({ url }); f.root().getElementById('grab').click();
   assert(f.root().querySelectorAll('.item').length > 0, 'Netflix guard requires its real hostname and watch path: ' + url);
 }
-console.log('content widget: keyboard navigation, focus, messages, drag/hide cleanup and protected-video guidance passed');
+{
+  const f = fixture();
+  const root = f.root();
+  root.getElementById('grab').click();
+  const oldRow = root.querySelector('.item');
+  const oldToken = f.messages.find(m => m.type === 'swiftget-media-request').clientToken;
+  f.ctx.location.href = 'https://example.test/watch?video=next';
+  oldRow.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'a queued old row cannot download after SPA navigation');
+  assert.equal(f.hosts().length, 0, 'old page bubbles are removed immediately');
+  const reset = [...f.messages].reverse().find(m => m.type === 'swiftget-player-changed');
+  assert(reset?.clientToken && reset.clientToken !== oldToken);
+  assert(!Object.hasOwn(reset, 'url') && !Object.hasOwn(reset, 'src'), 'freshness reset does not send a media URL');
+  f.send({ type: 'swiftget-media', clientToken: oldToken, items: formats() });
+  assert.equal(f.hosts().length, 0, 'old-generation broadcasts are ignored');
+  f.send({ type: 'swiftget-media', clientToken: reset.clientToken, items: [{ label: 'New video', ext: 'mp4', url: 'https://cdn.example.test/next.mp4' }] });
+  assert.equal(f.hosts().length, 1);
+  f.root().getElementById('grab').click();
+  assert(f.root().querySelector('.item').textContent.includes('New video'));
+}
+{
+  const f = fixture();
+  const root = f.root();
+  root.getElementById('grab').click();
+  const oldRow = root.querySelector('.item');
+  const oldToken = f.messages.find(m => m.type === 'swiftget-media-request').clientToken;
+  f.video.currentSrc = 'https://cdn.example.test/next.mp4';
+  oldRow.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'source replacement cannot download the previous format');
+  const reset = [...f.messages].reverse().find(m => m.type === 'swiftget-player-changed');
+  assert(reset && reset.clientToken !== oldToken, 'reused main player gets a new opaque generation');
+  f.send({ type: 'swiftget-media', clientToken: oldToken, items: formats() });
+  assert.equal(root.getElementById('list').hidden, true);
+  f.send({ type: 'swiftget-media', clientToken: reset.clientToken, items: [{ label: 'Replacement video', ext: 'mp4', url: 'https://cdn.example.test/next.mp4' }] });
+  root.getElementById('grab').click();
+  assert(root.querySelector('.item').textContent.includes('Replacement video'));
+}
+{
+  const f = fixture();
+  f.tick(1500);
+  f.video.currentSrc = 'https://cdn.example.test/auto-next.mp4';
+  f.tick(1500);
+  const reset = [...f.messages].reverse().find(m => m.type === 'swiftget-player-changed');
+  const seen = [...f.messages].reverse().find(m => m.type === 'swiftget-video-seen');
+  assert(reset && seen && seen.clientToken === reset.clientToken, 'same-page generic video observation uses the new generation');
+  const count = f.messages.filter(m => m.type === 'swiftget-player-changed').length;
+  f.tick(700); f.tick(1500); f.tick(700);
+  assert.equal(f.messages.filter(m => m.type === 'swiftget-player-changed').length, count, 'an unchanged source does not reset repeatedly');
+}
+{
+  const f = fixture();
+  const root = f.root();
+  root.getElementById('grab').click();
+  const oldRow = root.querySelector('.item');
+  const source = f.video.currentSrc;
+  f.video.currentSrc = '';
+  oldRow.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'an empty transitioning source blocks the previous format');
+  assert.equal(root.getElementById('list').hidden, true, 'old choices close during the transition');
+  assert(!f.messages.some(m => m.type === 'swiftget-player-changed'), 'transient buffering does not create a new generation');
+  f.video.currentSrc = source;
+  root.getElementById('grab').click();
+  root.querySelector('.item').click();
+  assert(f.messages.some(m => m.type === 'swiftget-download'), 'the same source remains usable after buffering');
+}
+{
+  const f = fixture({ url: 'https://example.test/feed', initialSource: 'blob:https://example.test/reused', initialLink: 'https://www.youtube.com/watch?v=first' });
+  const root = f.root();
+  root.getElementById('grab').click();
+  const old = root.querySelector('.item');
+  f.videoLink.href = 'https://www.youtube.com/watch?v=second';
+  old.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'a changed post link blocks prior formats even with the same source');
+  assert(f.messages.some(m => m.type === 'swiftget-player-changed'));
+}
+{
+  const f = fixture({ url: 'https://example.test/feed', initialSource: 'blob:https://example.test/shared', initialLink: 'https://www.youtube.com/watch?v=first' });
+  const next = f.document.createElement('video');
+  Object.assign(next, { duration: 60, paused: false, ended: false, currentSrc: 'blob:https://example.test/shared', src: '', tabIndex: 0 });
+  const link = f.document.createElement('a'); link.href = 'https://www.youtube.com/watch?v=second'; next.appendChild(link);
+  f.video.paused = true;
+  f.document.documentElement.appendChild(next);
+  f.tick(700);
+  assert(f.messages.some(m => m.type === 'swiftget-player-changed'), 'different post links advance generation even if media URL is shared');
+}
+{
+  const f = fixture({ topFrame: false, deferResolve: true });
+  f.tick(700);
+  const root = f.root();
+  root.getElementById('grab').click();
+  assert.equal(f.pendingVideos(), 1);
+  f.video.currentSrc = 'https://cdn.example.test/new-embedded.mp4';
+  f.tick(700);
+  root.getElementById('grab').click();
+  assert.equal(f.pendingVideos(), 2);
+  f.resolveVideo(0, { items: [{ label: 'Old embedded video', url: 'https://cdn.example.test/old.mp4', ext: 'mp4' }] });
+  assert(!root.textContent.includes('Old embedded video'), 'late prior lookup cannot revive stale formats');
+  f.resolveVideo(1, { items: [{ label: 'New embedded video', url: 'https://cdn.example.test/new-embedded.mp4', ext: 'mp4' }] });
+  assert(root.textContent.includes('New embedded video'));
+}
+{
+  const f = fixture({ topFrame: false, deferResolve: true });
+  f.tick(700); f.tick(1500);
+  const first = [...f.messages].reverse().find(m => m.type === 'swiftget-video-seen');
+  assert(first?.frameToken, 'embedded frame announces an opaque generation');
+  f.root().getElementById('grab').click();
+  const oldRequest = [...f.messages].reverse().find(m => m.type === 'swiftget-resolve-video');
+  assert.equal(oldRequest.frameToken, first.frameToken);
+  f.video.currentSrc = 'https://cdn.example.test/reused-embedded-next.mp4';
+  f.tick(700); f.tick(1500);
+  const second = [...f.messages].reverse().find(m => m.type === 'swiftget-video-seen');
+  assert(second?.frameToken && second.frameToken !== first.frameToken, 'a reused embedded player advances its frame generation');
+  let result;
+  f.send({ type: 'swiftget-request-frame-generation' }, { id: 'foreign-extension' }, r => { result = r; });
+  assert.equal(result, undefined, 'untrusted senders cannot query frame generations');
+  f.send({ type: 'swiftget-request-frame-generation' }, { id: 'synthetic-extension' }, r => { result = r; });
+  assert.equal(result.frameToken, second.frameToken, 'trusted worker receives the live frame generation');
+  f.ctx.location.href = 'https://example.test/new-frame';
+  f.send({ type: 'swiftget-request-frame-generation' }, { id: 'synthetic-extension' }, r => { result = r; });
+  assert.notEqual(result.frameToken, second.frameToken, 'frame navigation advances its generation immediately');
+}
+{
+  const first = fixture({ topFrame: false, url: 'https://example.test/embed/a' });
+  const second = fixture({ topFrame: false, url: 'https://example.test/embed/b' });
+  first.tick(700); first.tick(1500); second.tick(700); second.tick(1500);
+  const seen = f => f.messages.filter(m => m.type === 'swiftget-video-seen');
+  const firstCount = seen(first).length, secondCount = seen(second).length;
+  const token = seen(second).at(-1).frameToken;
+  second.document.emit('play', { target: second.video, composedPath: () => [second.video] });
+  second.flush();
+  assert.equal(seen(second).length, secondCount + 1, 'starting a preloaded embedded video reannounces that frame');
+  assert.equal(seen(second).at(-1).frameToken, token, 'playback of the same video keeps its generation');
+  assert.equal(seen(first).length, firstCount, 'another embedded frame is not reannounced');
+  const afterPlay = seen(second).length;
+  second.video.duration = 2;
+  second.document.emit('play', { target: second.video, composedPath: () => [second.video] });
+  second.flush();
+  assert.equal(seen(second).length, afterPlay, 'a tiny background loop does not steal the active video');
+}
+{
+  const f = fixture({ topFrame: false, deferResolve: true });
+  f.tick(700);
+  f.root().getElementById('grab').click();
+  f.ctx.location.href = 'https://example.test/next';
+  f.global('popstate');
+  assert.equal(f.hosts().length, 0);
+  f.resolveVideo(0, { items: [{ label: 'Prior page video', url: 'https://cdn.example.test/old.mp4', ext: 'mp4' }] });
+  assert.equal(f.hosts().length, 0, 'late callback cannot resurrect a detached prior-page widget');
+}
+{
+  const f = fixture({ url: 'https://www.youtube.com/watch?v=video-a', initialSource: 'blob:https://www.youtube.com/quality-a' });
+  const root = f.root();
+  root.getElementById('grab').click();
+  f.video.currentSrc = 'blob:https://www.youtube.com/quality-b';
+  f.tick(700);
+  assert(!f.messages.some(m => m.type === 'swiftget-player-changed'), 'YouTube MediaSource quality changes keep the same video generation');
+  assert.equal(root.getElementById('list').hidden, false);
+  assert(root.querySelectorAll('.item').length > 0);
+  const replacement = f.document.createElement('video');
+  Object.assign(replacement, { duration: 60, paused: false, ended: false, currentSrc: 'blob:https://www.youtube.com/quality-c', src: '', tabIndex: 0 });
+  f.video.paused = true;
+  f.document.documentElement.appendChild(replacement);
+  f.tick(700);
+  assert(!f.messages.some(m => m.type === 'swiftget-player-changed'), 'replacing a YouTube player for the same video does not reset quality choices');
+  f.ctx.location.search = '?v=video-a&t=42&list=playlist';
+  f.ctx.location.hash = '#t=42';
+  f.global('popstate');
+  assert.equal(f.hosts().length, 2, 'timestamp and playlist parameters keep existing same-video widgets');
+  assert(!f.messages.some(m => m.type === 'swiftget-player-changed'));
+  f.ctx.location.search = '?v=video-b&list=playlist';
+  root.querySelector('.item').click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'switching YouTube video IDs blocks old actions immediately');
+  assert(f.messages.some(m => m.type === 'swiftget-player-changed'));
+}
+{
+  const f = fixture();
+  const count = () => f.messages.filter(m => m.type === 'swiftget-media-request').length;
+  const initial = count();
+  f.send({ type: 'swiftget-media', clientToken: undefined, items: formats() }, { id: 'foreign-extension' });
+  assert.equal(count(), initial, 'untrusted untagged messages cannot trigger a handshake');
+  f.send({ type: 'swiftget-media', clientToken: undefined, items: formats() }, { id: 'synthetic-extension' });
+  f.send({ type: 'swiftget-media', clientToken: undefined, items: formats() }, { id: 'synthetic-extension' });
+  assert.equal(count(), initial + 1, 'worker restart triggers one bounded token handshake');
+}
+console.log('content widget: keyboard, placement, fullscreen and video-generation checks passed');

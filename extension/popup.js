@@ -2,6 +2,59 @@
 // labels and page titles are always text nodes, never HTML.
 const OLD_SIZES = { small: 85, normal: 100, large: 125 };
 let integrationEnabled = true;
+let activeSnapshot = null;
+let activeTabId = null;
+let mediaRevision = 0;
+let refreshQueued = false;
+let refreshDeferred = false;
+const pendingActions = new Set();
+const sentActions = new Set();
+
+function pageIdentity(href) {
+  try {
+    const url = new URL(href);
+    if (/(^|\.)(youtube\.com|youtube-nocookie\.com)$/i.test(url.hostname)) {
+      if (url.pathname === "/watch" && url.searchParams.has("v")) return `${url.origin}/watch?v=${url.searchParams.get("v")}`;
+      if (/^\/(?:shorts|live|embed)\/[^/]+\/?$/i.test(url.pathname)) return `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+    }
+    return url.href;
+  } catch (_) { return String(href || ""); }
+}
+
+function currentSnapshot(snapshot) {
+  return !!snapshot && !!activeSnapshot && snapshot.tabId === activeSnapshot.tabId &&
+    snapshot.page === activeSnapshot.page && snapshot.clientToken === activeSnapshot.clientToken;
+}
+
+function showEmptyMedia(message = "Start playing a video to see available formats.") {
+  const box = document.getElementById("media");
+  const empty = document.createElement("div");
+  empty.className = "empty-state";
+  const title = document.createElement("strong");
+  title.textContent = "No Video Found Yet";
+  const hint = document.createElement("p");
+  hint.textContent = message;
+  empty.append(icon("video"), title, hint);
+  box.replaceChildren(empty);
+  document.getElementById("mediaCount").textContent = "";
+}
+
+function invalidateMedia() {
+  mediaRevision++;
+  activeSnapshot = null;
+  showEmptyMedia("Looking for the current video…");
+}
+
+function queueMediaRefresh({ invalidate = false } = {}) {
+  if (invalidate) invalidateMedia();
+  if (!invalidate && activeSnapshot && [...pendingActions].some((key) => key.startsWith(`${activeSnapshot.clientToken}:`))) {
+    refreshDeferred = true;
+    return;
+  }
+  if (refreshQueued) return;
+  refreshQueued = true;
+  Promise.resolve().then(() => { refreshQueued = false; void loadMedia(); });
+}
 
 function icon(kind) {
   const paths = {
@@ -96,7 +149,7 @@ function protectedRow(item) {
   return row;
 }
 
-function mediaRow({ label, detail, kind, unavailable, message, playlist }) {
+function mediaRow({ label, detail, kind, unavailable, message, playlist, snapshot }) {
   const row = document.createElement("div");
   row.className = "media-row";
   const symbol = document.createElement("div");
@@ -122,26 +175,45 @@ function mediaRow({ label, detail, kind, unavailable, message, playlist }) {
   button.type = "button";
   button.className = "download-button";
   button.dataset.download = "true";
-  button.dataset.unavailable = String(!!unavailable);
+  button.dataset.unavailable = String(!!unavailable || !snapshot.clientToken);
   const actionLabel = playlist ? "Download All" : "Download";
+  const item = message.item || {};
+  const actionKey = `${snapshot.clientToken}:${playlist ? "playlist" : `${item.yt?.source || ""}|${item.yt?.key || ""}|${item.url || ""}|${label}`}`;
+  if (sentActions.has(actionKey)) button.dataset.sent = "true";
   button.setAttribute("aria-label", `${actionLabel}: ${label}`);
   const buttonLabel = document.createElement("span");
   buttonLabel.textContent = unavailable ? "Unavailable" : actionLabel;
   button.append(icon("download"), buttonLabel);
   button.addEventListener("click", async () => {
-    if (button.disabled) return;
+    if (button.disabled || !currentSnapshot(snapshot)) return;
+    pendingActions.add(actionKey);
     button.dataset.pending = "true";
     buttonLabel.textContent = "Sending…";
     button.setAttribute("aria-busy", "true");
     error.hidden = true;
     updateDownloadControls();
-    const result = await request(message);
+    let tab;
+    try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (_) {}
+    if (!currentSnapshot(snapshot) || !tab || tab.id !== snapshot.tabId || pageIdentity(tab.url) !== snapshot.page) {
+      pendingActions.delete(actionKey);
+      queueMediaRefresh({ invalidate: true });
+      return;
+    }
+    // The worker validates the captured token and tab again at dispatch.
+    const result = await request({ ...message, tabId: snapshot.tabId, clientToken: snapshot.clientToken });
+    pendingActions.delete(actionKey);
+    if (!currentSnapshot(snapshot)) { if (refreshDeferred) { refreshDeferred = false; queueMediaRefresh(); } return; }
     button.dataset.pending = "false";
     button.setAttribute("aria-busy", "false");
     if (result && result.ok) {
+      sentActions.add(actionKey);
       button.dataset.sent = "true";
       buttonLabel.textContent = playlist ? "Opened" : "Sent";
       button.replaceChildren(icon("check"), buttonLabel);
+    } else if (result?.error && /video changed/i.test(result.error)) {
+      refreshDeferred = false;
+      queueMediaRefresh({ invalidate: true });
+      return;
     } else {
       buttonLabel.textContent = "Try Again";
       error.textContent = "Open Mac Downloader, then try again.";
@@ -149,24 +221,43 @@ function mediaRow({ label, detail, kind, unavailable, message, playlist }) {
       showConnection(false);
     }
     updateDownloadControls();
+    if (refreshDeferred) { refreshDeferred = false; queueMediaRefresh(); }
   });
   row.append(symbol, info, button);
   return row;
 }
 
 async function loadMedia() {
+  const revision = ++mediaRevision;
   let tab;
   try { [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch { return; }
-  if (!tab) return;
-  const items = await request({ type: "swiftget-get-media", tabId: tab.id });
-  if (!Array.isArray(items) || !items.length) return;
+  if (revision !== mediaRevision) return;
+  if (!tab || !Number.isInteger(tab.id)) { activeSnapshot = null; activeTabId = null; showEmptyMedia(); return; }
+  activeTabId = tab.id;
+  const page = pageIdentity(tab.url);
+  if (activeSnapshot && (activeSnapshot.tabId !== tab.id || activeSnapshot.page !== page)) {
+    activeSnapshot = null;
+    showEmptyMedia("Looking for the current video…");
+  }
+  const response = await request({ type: "swiftget-get-media", tabId: tab.id, snapshot: true });
+  if (revision !== mediaRevision) return;
+  let current;
+  try { [current] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (_) {}
+  if (revision !== mediaRevision) return;
+  if (!current || current.id !== tab.id || pageIdentity(current.url) !== page) { queueMediaRefresh({ invalidate: true }); return; }
+  const token = typeof response?.clientToken === "string" && response.clientToken ? response.clientToken : null;
+  const items = token && Array.isArray(response?.items) && response.tabId === tab.id ? response.items : [];
+  const snapshot = { tabId: tab.id, page, clientToken: token };
+  if (!currentSnapshot(snapshot)) sentActions.clear();
+  activeSnapshot = snapshot;
+  if (!items.length) { showEmptyMedia(); updateDownloadControls(); return; }
   const box = document.getElementById("media");
   box.replaceChildren();
   const title = (tab.title || "video").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 120);
   if (/youtube\.com/i.test(tab.url || "") && /[?&]list=/.test(tab.url || "")) {
     box.appendChild(mediaRow({
       label: "This Playlist", detail: "Choose videos in the app", kind: "playlist", playlist: true,
-      message: { type: "swiftget-playlist", url: tab.url },
+      message: { type: "swiftget-playlist", url: tab.url }, snapshot,
     }));
   }
   for (const item of items) {
@@ -176,7 +267,7 @@ async function loadMedia() {
     }
     box.appendChild(mediaRow({
       label: item.label || "Video", detail: item.sub || "", kind: item.ext && /^(mp3|m4a|aac|ogg|opus|flac|wav)$/i.test(item.ext) ? "audio" : "video", unavailable: item.disabled,
-      message: { type: "swiftget-download", item, title: tab.title, referrer: tab.url, fileName: `${title}.${item.ext || "mp4"}` },
+      message: { type: "swiftget-download", item, title: tab.title, referrer: tab.url, fileName: `${title}.${item.ext || "mp4"}` }, snapshot,
     }));
   }
   const formats = items.filter((item) => !item.protected && item.type !== "protected").length;
@@ -185,6 +276,22 @@ async function loadMedia() {
 }
 
 async function init() {
+  chrome.tabs.onUpdated?.addListener((tabId, change) => {
+    if (tabId !== activeTabId || !change.url) return;
+    const changedVideo = !activeSnapshot || pageIdentity(change.url) !== activeSnapshot.page;
+    queueMediaRefresh({ invalidate: changedVideo });
+  });
+  chrome.tabs.onActivated?.addListener(({ tabId }) => {
+    if (tabId !== activeTabId) queueMediaRefresh({ invalidate: true });
+  });
+  chrome.tabs.onRemoved?.addListener((tabId) => {
+    if (tabId === activeTabId) queueMediaRefresh({ invalidate: true });
+  });
+  chrome.runtime.onMessage?.addListener((message, sender) => {
+    if (sender?.id !== chrome.runtime.id || sender.tab || message.type !== "swiftget-popup-media-changed" || message.tabId !== activeTabId) return;
+    const changedVideo = !!activeSnapshot && message.clientToken !== activeSnapshot.clientToken;
+    queueMediaRefresh({ invalidate: changedVideo });
+  });
   document.getElementById("settings").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
     window.close();

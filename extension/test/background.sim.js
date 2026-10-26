@@ -8,7 +8,7 @@ const canceled = []; const erased = []; const dataRequests = [];
 let runtimeOrigin = "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 let runtimeVersion = "1.0.4";
 const readiness = [];
-const fullscreenTrace = []; let topFullscreen = false; let topFullscreenUnavailable = false;
+const fullscreenTrace = []; let topFullscreen = false; let topFullscreenUnavailable = false; let topClientToken = null; const frameTokens = new Map();
 let preparedConfig;
 let preparedConfigReads = 0;
 const chrome = {
@@ -25,6 +25,8 @@ const chrome = {
   webRequest: { onHeadersReceived: on("headers"), onBeforeRequest: on("before") },
   tabs: { onUpdated: on("upd"), onRemoved: on("rm"), get: async (id) => ({ id, url: tabUrl }), query: async () => [{ id: 7 }],
           sendMessage: async (id, m, options) => {
+            if (m.type === 'swiftget-request-client-token') return topClientToken ? { clientToken: topClientToken } : undefined;
+            if (m.type === 'swiftget-request-frame-generation') return { frameToken: frameTokens.get(`${id}:${options?.frameId}`) };
             if (m.type === 'swiftget-read-top-fullscreen') {
               fullscreenTrace.push({ id, type: m.type, options });
               if (topFullscreenUnavailable) throw new Error('top frame unavailable');
@@ -397,6 +399,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     // normal files, and a public Netflix page is not blanket-blocked.
     tabUrl = "https://ordinary.example/videos";
     session.media_32 = [{ url: fragment, type: "video/mp4" }, { url: normal, type: "video/mp4" }];
+    session.mediaOwner_32 = tabUrl;
     const publicItems = await ctx.itemsForTab(32);
     assert.strictEqual(publicItems.length, 1);
     assert.strictEqual(publicItems[0].url, normal);
@@ -404,9 +407,252 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
     await ctx.sendToApp({ url: normal, referrer: "https://www.netflix.com/title/1" });
     await ctx.sendToApp({ url: "https://notnetflix.com/watch/public.mp4", referrer: "https://ordinary.example/" });
     assert.strictEqual(sent.length, beforeNormal + 2, "ordinary media and domain lookalikes still reach the app");
-    delete session.media_31; delete session.res_31; delete session.media_32;
+    delete session.media_31; delete session.res_31; delete session.media_32; delete session.mediaOwner_32;
     tabUrl = previousTab;
     console.log("protected playback: Netflix fragments/watch pages stay cookie-free; public and lookalike sites remain usable");
+  }
+  // Same-page navigation must not show a previously resolved YouTube video.
+  {
+    const previousTab = tabUrl, A = "https://www.youtube.com/watch?v=AAAAAAAAAAA", B = "https://www.youtube.com/watch?v=BBBBBBBBBBB";
+    tabUrl = B;
+    session.yt_70 = { videoId: "AAAAAAAAAAA", sabr: false, streams: {}, resolved: { title: "old video", options: [{ label: "old format", videoUrl: "https://synthetic.example/a" }] } };
+    assert(!(await ctx.itemsForTab(70)).some(i => i.label === "old format"), "a mismatched cached video never appears");
+    await ctx.addYoutubeStream(70, { itag: 137, dur: "30", type: "video", url: "https://synthetic.example/b" });
+    assert.strictEqual(session.yt_70.videoId, "BBBBBBBBBBB");
+    assert(!session.yt_70.resolved, "a stream for a new video cannot retain the previous resolved formats");
+    await ctx.addYoutubeStream(80, { itag: 137, dur: "30", type: "video", url: "https://synthetic.example/old-frame" }, "https://www.youtube.com/embed/AAAAAAAAAAA", 4);
+    assert(!session.yt_80, "a previous YouTube iframe cannot contribute its streams to the current video");
+
+    // Hold a storage write across a navigation; the queued clear/new state
+    // must win even if the older write completes last in wall-clock time.
+    let entered, release;
+    const writeEntered = new Promise(r => { entered = r; });
+    const hold = new Promise(r => { release = r; });
+    const normalSet = chrome.storage.session.set;
+    chrome.storage.session.set = async (obj) => {
+      if (obj.yt_71?.videoId === "AAAAAAAAAAA") { entered(); await hold; }
+      return normalSet(obj);
+    };
+    tabUrl = A;
+    const old = ctx.addYoutubeStream(71, { itag: 137, dur: "31", type: "video", url: "https://synthetic.example/a" });
+    await writeEntered;
+    tabUrl = B;
+    const navigation = listeners.upd(71, { url: B }, { id: 71, url: B });
+    await tick(); release(); await Promise.all([old, navigation]); await new Promise(r => setTimeout(r, 100));
+    assert.strictEqual(session.yt_71?.videoId, "BBBBBBBBBBB", "a delayed old stream cannot overwrite the new visit");
+    chrome.storage.session.set = normalSet;
+
+    // Generic media discovered under the old page must not reappear after an
+    // SPA URL update, including when its storage write was already pending.
+    let mediaEntered, releaseMedia;
+    const enteredMedia = new Promise(r => { mediaEntered = r; });
+    const holdMedia = new Promise(r => { releaseMedia = r; });
+    chrome.storage.session.set = async (obj) => {
+      if (obj.media_72) { mediaEntered(); await holdMedia; }
+      return normalSet(obj);
+    };
+    const oldPage = "https://ordinary.example/old", newPage = "https://ordinary.example/new";
+    tabUrl = oldPage;
+    const oldMedia = ctx.addMedia(72, { url: "https://synthetic.example/old.mp4", type: "video/mp4" });
+    await enteredMedia;
+    tabUrl = newPage;
+    const newPageNav = listeners.upd(72, { url: newPage }, { id: 72, url: newPage });
+    await tick(); releaseMedia(); await Promise.all([oldMedia, newPageNav]);
+    assert.deepStrictEqual(Array.from(await ctx.itemsForTab(72)), [], "old page media cannot reappear after navigation");
+    chrome.storage.session.set = normalSet;
+
+    let oldResultEntered, releaseOldResult, held = false;
+    const enteredResult = new Promise(r => { oldResultEntered = r; });
+    const holdResult = new Promise(r => { releaseOldResult = r; });
+    const embeddedA = "https://video.example/a", embeddedB = "https://video.example/b";
+    chrome.storage.session.set = async (obj) => {
+      if (!held && obj.res_77?.page === embeddedA && obj.res_77.resolving === false) { held = true; oldResultEntered(); await holdResult; }
+      return normalSet(obj);
+    };
+    tabUrl = "https://ordinary.example/feed";
+    const oldResolution = ctx.resolvePage(77, embeddedA, true);
+    await enteredResult;
+    const newResolution = ctx.resolvePage(77, embeddedB, true);
+    await tick(); releaseOldResult(); await Promise.all([oldResolution, newResolution]);
+    assert.strictEqual(session.res_77?.page, embeddedB, "a late embedded resolver write cannot replace the current frame");
+    chrome.storage.session.set = normalSet;
+
+    // A different embedded player must not reuse another frame's tab-wide
+    // cached formats just because both live on the same containing page.
+    tabUrl = "https://ordinary.example/feed";
+    session.res_75 = { page: "https://video.example/old", ownerPage: tabUrl, resolved: { options: [{ label: "old frame", videoUrl: "https://synthetic.example/old" }] } };
+    const frameResult = await ctx.resolveOneVideo({ frame: true, page: "https://video.example/new", src: "https://synthetic.example/new.mp4" }, { id: 75, url: tabUrl });
+    assert(!frameResult.items.some(i => i.label === "old frame"), "a different embedded player cannot reuse the old frame's formats");
+    assert.strictEqual(ytCalls.at(-1).url, "https://video.example/new", "the new frame is resolved independently");
+
+    assert.notStrictEqual(ctx.pageIdentity("https://first.example/watch?v=same"), ctx.pageIdentity("https://second.example/watch?v=same"), "ordinary sites' v parameters are not YouTube IDs");
+    assert.notStrictEqual(ctx.pageIdentity("https://ordinary.example/#/one"), ctx.pageIdentity("https://ordinary.example/#/two"), "hash-router video routes remain distinct");
+    const normalTabGet = chrome.tabs.get;
+    chrome.tabs.get = async (id) => { if (id === 76) throw new Error("closed tab"); return normalTabGet(id); };
+    session.yt_76 = { videoId: "AAAAAAAAAAA", resolved: { options: [{ label: "orphan", videoUrl: "https://synthetic.example/orphan" }] } };
+    assert.deepStrictEqual(Array.from(await ctx.itemsForTab(76)), [], "an unavailable tab must never expose cached video formats");
+    chrome.tabs.get = normalTabGet;
+
+    // An A→B→A visit is a new generation, not permission for the first A's
+    // asynchronous resolver to overwrite the latest visit.
+    const normalFetch = ctx.fetch;
+    let firstEntered, secondEntered, releaseFirst, releaseSecond, aCount = 0;
+    const firstStarted = new Promise(r => { firstEntered = r; });
+    const secondStarted = new Promise(r => { secondEntered = r; });
+    const firstHold = new Promise(r => { releaseFirst = r; });
+    const secondHold = new Promise(r => { releaseSecond = r; });
+    ctx.fetch = async (url, opts = {}) => {
+      if (!url.endsWith("/resolve")) return normalFetch(url, opts);
+      const page = JSON.parse(opts.body).url;
+      let title = "new B";
+      if (page.includes("AAAAAAAAAAA")) {
+        if (++aCount === 1) { firstEntered(); await firstHold; title = "old A"; }
+        else { secondEntered(); await secondHold; title = "new A"; }
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, title, options: [{ key: "q", label: title, quality: "720p", videoUrl: "https://synthetic.example/video", ext: "mp4" }] }) };
+    };
+    tabUrl = A; const oldA = ctx.resolveYoutube(73, A); await firstStarted;
+    tabUrl = B; await listeners.upd(73, { url: B }, { id: 73, url: B }); await tick();
+    tabUrl = A; await listeners.upd(73, { url: A }, { id: 73, url: A }); await secondStarted;
+    releaseFirst(); await oldA; await tick();
+    assert.notStrictEqual(session.yt_73?.resolved?.title, "old A", "an old A result cannot overwrite a later A visit");
+    releaseSecond(); await new Promise(r => setTimeout(r, 50));
+    assert.strictEqual(session.yt_73?.resolved?.title, "new A");
+    ctx.fetch = normalFetch;
+    tabUrl = previousTab;
+    console.log("navigation generations: stale results and late writes are rejected");
+  }
+  // Popup actions are bound to the visible page AND player generation. A
+  // same-URL player replacement must invalidate old rows before a click.
+  {
+    const previousTab = tabUrl;
+    tabUrl = "https://www.youtube.com/watch?v=CCCCCCCCCCC";
+    const top = { id: chrome.runtime.id, frameId: 0, tab: { id: 74, url: tabUrl } };
+    const popup = { id: chrome.runtime.id, url: chrome.runtime.getURL("popup.html") };
+    const request = (message, sender) => new Promise(resolve => listeners.msg(message, sender, resolve));
+    topClientToken = "synthetic-document:1";
+    await request({ type: "swiftget-media-request", clientToken: "synthetic-document:1" }, top);
+    await new Promise(r => setTimeout(r, 100));
+    const snapshot = await request({ type: "swiftget-get-media", tabId: 74, snapshot: true }, popup);
+    assert.strictEqual(snapshot.tabId, 74);
+    assert.strictEqual(snapshot.clientToken, "synthetic-document:1");
+    assert(snapshot.items.some(i => i.yt), "the current video yields popup formats");
+    const oldItem = snapshot.items.find(i => i.yt);
+    topClientToken = "synthetic-document:2";
+    const before = sent.length;
+    const early = await request({ type: "swiftget-download", tabId: 74, clientToken: snapshot.clientToken, referrer: tabUrl, item: oldItem }, popup);
+    assert.strictEqual(early.ok, false, "the live player token blocks stale clicks even before the background sees the change");
+    listeners.msg({ type: "swiftget-player-changed", clientToken: "synthetic-document:2" }, top, () => {});
+    const stale = await request({ type: "swiftget-download", tabId: 74, clientToken: snapshot.clientToken, referrer: tabUrl, item: oldItem }, popup);
+    assert.strictEqual(stale.ok, false, "a same-URL player replacement invalidates an old popup row");
+    assert.strictEqual(sent.length, before, "a rejected stale row never reaches the app");
+    const stalePlaylist = await request({ type: "swiftget-playlist", tabId: 74, clientToken: snapshot.clientToken, url: tabUrl }, popup);
+    assert.strictEqual(stalePlaylist.ok, false, "a stale popup playlist action is rejected too");
+    listeners.msg({ type: "swiftget-player-changed", clientToken: "synthetic-document:1" }, top, () => {});
+    await new Promise(r => setTimeout(r, 100));
+    const newer = await request({ type: "swiftget-get-media", tabId: 74, snapshot: true }, popup);
+    assert.strictEqual(newer.clientToken, "synthetic-document:2", "a delayed earlier token cannot roll generation backward");
+    // A late message from a different (replaced) document is rejected by the
+    // live frame-0 handshake, even when both documents have the same URL.
+    topClientToken = "synthetic-document:2";
+    listeners.msg({ type: "swiftget-player-changed", clientToken: "old-document:99" }, top, () => {});
+    await tick();
+    assert.strictEqual((await request({ type: "swiftget-get-media", tabId: 74, snapshot: true }, popup)).clientToken, "synthetic-document:2", "a replaced document cannot regain the active generation");
+    const live = await request({ type: "swiftget-download", tabId: 74, clientToken: newer.clientToken, referrer: tabUrl, item: newer.items.find(i => i.yt) }, popup);
+    assert.strictEqual(live.ok, true, "a current popup format still downloads");
+    listeners.msg({ type: "swiftget-player-changed", clientToken: "synthetic-document:3" }, { ...top, id: "different-extension" }, () => {});
+    await tick();
+    assert.strictEqual((await request({ type: "swiftget-get-media", tabId: 74, snapshot: true }, popup)).clientToken, "synthetic-document:2", "another extension cannot change this tab's player generation");
+    // A worker restart loses the in-memory token, so the popup asks the
+    // trusted top frame and reconstructs the current generation.
+    vm.runInContext("tabClientTokens.delete(74)", ctx);
+    topClientToken = "synthetic-document:2";
+    const recovered = await request({ type: "swiftget-get-media", tabId: 74, snapshot: true }, popup);
+    assert.strictEqual(recovered.clientToken, topClientToken, "popup re-establishes its token after a worker restart");
+    topClientToken = null;
+
+    // A generic direct video can be observed before document_idle registers
+    // the content script. Keep only this worker's newly observed resources,
+    // not unmarked prior-session media from the very same URL.
+    const generic = "https://ordinary.example/direct-video";
+    tabUrl = generic;
+    const genericTop = { id: chrome.runtime.id, frameId: 0, tab: { id: 78, url: generic } };
+    session.media_78 = [{ url: "https://synthetic.example/stale.mp4", type: "video/mp4" }];
+    session.mediaOwner_78 = generic;
+    await ctx.addMedia(78, { url: "https://synthetic.example/fresh.mp4", type: "video/mp4" }, generic, 0);
+    await listeners.upd(78, { url: generic }, { id: 78, url: generic });
+    topClientToken = "generic-document:0";
+    await request({ type: "swiftget-media-request", clientToken: topClientToken }, genericTop);
+    const genericSnapshot = await request({ type: "swiftget-get-media", tabId: 78, snapshot: true }, popup);
+    assert(genericSnapshot.items.some(i => i.url === "https://synthetic.example/fresh.mp4"), "fresh pre-handshake direct media remains available");
+    assert(!genericSnapshot.items.some(i => i.url === "https://synthetic.example/stale.mp4"), "unmarked persisted media is not trusted after a worker restart");
+    const refreshBefore = tabMsgs.filter(m => m.type === "swiftget-refresh-current-player").length;
+    tabUrl = "https://ordinary.example/direct-video-next";
+    await listeners.upd(78, { url: tabUrl }, { id: 78, url: tabUrl });
+    assert.strictEqual(tabMsgs.filter(m => m.type === "swiftget-refresh-current-player").length, refreshBefore + 1, "generic SPA navigation re-announces the live player even if browser metadata lagged");
+
+    const many = "https://ordinary.example/many";
+    tabUrl = many;
+    for (let i = 0; i < 25; i++) await ctx.addMedia(81, { url: `https://synthetic.example/${i}.mp4`, type: "video/mp4" }, many, 0);
+    assert.strictEqual(vm.runInContext("freshMedia.get(81).urls.size", ctx), 15, "pre-handshake tracking remains bounded to the media ring size");
+    assert.strictEqual(session.media_81.length, 15);
+    topClientToken = "many-document:0";
+    await request({ type: "swiftget-media-request", clientToken: topClientToken }, { id: chrome.runtime.id, frameId: 0, tab: { id: 81, url: many } });
+    assert.strictEqual(session.media_81.length, 15, "bounded fresh media remains available after handshake");
+    assert.strictEqual(session.media_81[0].url, "https://synthetic.example/10.mp4");
+    tabUrl = generic;
+
+    // The generic current player is re-announced once after a reset, allowing
+    // an already open page to resolve again when its worker has restarted.
+    const priorSend = chrome.tabs.sendMessage;
+    let refreshes = 0;
+    chrome.tabs.sendMessage = async (id, message, options) => {
+      if (id === 79 && message.type === "swiftget-refresh-current-player") {
+        refreshes++;
+        listeners.msg({ type: "swiftget-video-seen", page: generic, frame: false, clientToken: topClientToken }, { id: chrome.runtime.id, frameId: 0, tab: { id, url: generic } }, () => {});
+        return;
+      }
+      return priorSend(id, message, options);
+    };
+    session.res_79 = { page: generic, ownerPage: generic, resolved: { title: "stale", options: [{ label: "old", videoUrl: "https://synthetic.example/old" }] } };
+    topClientToken = "restarted-document:0";
+    await request({ type: "swiftget-get-media", tabId: 79, snapshot: true }, popup);
+    await new Promise(r => setTimeout(r, 120));
+    const refreshed = await request({ type: "swiftget-get-media", tabId: 79, snapshot: true }, popup);
+    assert.strictEqual(refreshes, 1, "generic reset requests exactly one current-player re-announcement");
+    assert(refreshed.items.some(i => i.yt?.title === "Real: Title"), "generic player is resolved again after worker restart");
+    assert(!refreshed.items.some(i => i.label === "old"), "ambiguous old same-URL cache is not displayed");
+    chrome.tabs.sendMessage = priorSend;
+    topClientToken = null;
+
+    // A frame can navigate or reuse its player without changing the top URL.
+    // Challenge the live frame before presenting or dispatching its formats.
+    const parentPage = "https://ordinary.example/embedded";
+    tabUrl = parentPage;
+    const frame = { id: chrome.runtime.id, frameId: 5, tab: { id: 82, url: parentPage } };
+    const firstFrame = "frame-document:1", nextFrame = "frame-document:2";
+    frameTokens.set("82:5", firstFrame);
+    listeners.msg({ type: "swiftget-video-seen", page: "https://video.example/frame-one", frame: true, frameToken: firstFrame }, frame, () => {});
+    await new Promise(r => setTimeout(r, 120));
+    assert.strictEqual(session.res_82?.frameToken, firstFrame, "current embedded frame is resolved with its provenance");
+    assert((await ctx.itemsForTab(82)).some(i => i.frameToken === firstFrame), "live embedded formats remain available");
+    frameTokens.set("82:5", nextFrame);
+    assert.deepStrictEqual(Array.from(await ctx.itemsForTab(82)), [], "old embedded formats disappear before an old frame can be chosen");
+    const beforeStaleFrame = ytCalls.length;
+    listeners.msg({ type: "swiftget-video-seen", page: "https://video.example/frame-one", frame: true, frameToken: firstFrame }, frame, () => {});
+    await tick();
+    assert.strictEqual(ytCalls.length, beforeStaleFrame, "a delayed old-frame announcement cannot start a resolution");
+    const oldFrameAction = await request({ type: "swiftget-download", frameToken: firstFrame, item: { url: "https://synthetic.example/old.mp4" } }, frame);
+    assert.strictEqual(oldFrameAction.ok, false, "old frame cannot dispatch a stale download");
+    listeners.msg({ type: "swiftget-video-seen", page: "https://video.example/frame-two", frame: true, frameToken: nextFrame }, frame, () => {});
+    await new Promise(r => setTimeout(r, 120));
+    assert.strictEqual(session.res_82?.frameToken, nextFrame);
+    assert((await ctx.itemsForTab(82)).some(i => i.frameToken === nextFrame), "replacement frame formats become available");
+    const newFrameAction = await request({ type: "swiftget-download", frameToken: nextFrame, item: { url: "https://synthetic.example/new.mp4" } }, frame);
+    assert.strictEqual(newFrameAction.ok, true, "a current embedded frame can still download");
+    frameTokens.delete("82:5");
+    tabUrl = previousTab;
+    console.log("popup actions: old video generations cannot be downloaded");
   }
   console.log("background simulation: all checks passed");
 })().catch((e) => { console.error(e); process.exit(1); });

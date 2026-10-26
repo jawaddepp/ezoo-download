@@ -75,10 +75,10 @@
 
   // The video the user is watching: a playing one first, else the biggest
   // one on screen.
-  function biggestVideo() {
+  function biggestVideo(videos = allVideos()) {
     let best = null;
     let score = 0;
-    for (const v of allVideos()) {
+    for (const v of videos) {
       const r = v.getBoundingClientRect();
       if (r.width < 200 || r.height < 100) continue;
       const visible = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
@@ -143,19 +143,32 @@
   }
 
   let lastPage = "";
-  function watchVideos() {
+  function watchVideos(playedVideo = null) {
+    syncPage();
     const v = biggestVideo();
     if (!v) return;
+    // A page may contain multiple already-loaded embedded players. Announce
+    // the one the user actually starts, even if its URL has not changed.
+    // Tiny short loops are not user-selected video playback.
+    if (!TOP && playedVideo === v && !v.paused && !v.ended && (v.duration > 3 || !Number.isFinite(v.duration))) lastPage = "";
+    const bubble = bubbles.get(v);
+    const token = clientToken;
+    if (bubble && syncVideo(bubble)) renderOne(bubble);
+    syncMainVideo(v);
     // ignore tiny muted background loops that never play for long
     if (v.paused && !(v.duration > 3) && !v.currentSrc) return;
     // in a frame (an embedded player): its own address when it is a video
     // page (YouTube / Vimeo embeds), otherwise the page around it (the
     // add-in knows that one)
     const page = TOP ? linkFor(v) : isVideoPage(location.href) ? location.href : "";
+    if (bubble && syncBubbleLink(bubble, TOP ? page : linkFor(v))) {
+      if (token === clientToken) advanceMainPlayer();
+      renderOne(bubble);
+    }
     if (page !== lastPage || (!TOP && !lastPage)) {
       if (!TOP && lastPage === "frame:" + page) return;
       lastPage = TOP ? page : "frame:" + page;
-      chrome.runtime.sendMessage({ type: "swiftget-video-seen", page, frame: !TOP }).catch?.(() => {});
+      chrome.runtime.sendMessage({ type: "swiftget-video-seen", page, frame: !TOP, ...(TOP ? { clientToken } : { frameToken: clientToken }) }).catch?.(() => {});
     }
   }
 
@@ -165,6 +178,147 @@
   // other video is looked up when its bubble is clicked. A bubble can be
   // dragged around its player and stays there while it remains visible.
   const bubbles = new Map(); // video -> bubble
+  // YouTube's video ID identifies a watch page despite timestamp or playlist
+  // changes. Other sites may use query strings and hashes as SPA routes.
+  function pageIdentity(href) {
+    try {
+      const url = new URL(href);
+      if (/(^|\.)(youtube\.com|youtube-nocookie\.com)$/i.test(url.hostname)) {
+        if (url.pathname === "/watch" && url.searchParams.has("v")) {
+          return `${url.origin}/watch?v=${url.searchParams.get("v")}`;
+        }
+        if (/^\/(?:shorts|live|embed)\/[^/]+\/?$/i.test(url.pathname)) return `${url.origin}${url.pathname.replace(/\/$/, "")}`;
+      }
+      return url.href;
+    } catch (_) { return String(href); }
+  }
+  let currentPage = pageIdentity(location.href);
+  let playerGeneration = 0;
+  let mainVideo = null;
+  let mainSource = "";
+  let mainLinkPage = "";
+  // This is an opaque freshness marker, not an authentication token. It
+  // changes for each frame's player/page generation without sharing URLs.
+  const documentNonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let clientToken = `${documentNonce}:0`;
+  let lastMediaHandshake = 0;
+
+  function advanceMainPlayer() {
+    if (TOP) items = [];
+    lastPage = "";
+    clientToken = `${documentNonce}:${++playerGeneration}`;
+    if (TOP) {
+      try { chrome.runtime.sendMessage({ type: "swiftget-player-changed", generation: playerGeneration, clientToken }).catch?.(() => {}); } catch (_) {}
+    }
+  }
+
+  function requestMedia() {
+    const token = clientToken;
+    chrome.runtime.sendMessage({ type: "swiftget-media-request", clientToken: token }, (res) => {
+      if (!chrome.runtime.lastError && token === clientToken) update(res);
+    });
+  }
+
+  // The player node can survive a single-page navigation. Tear down its
+  // state before using a new page's formats, and make old callbacks inert.
+  function syncPage() {
+    const page = pageIdentity(location.href);
+    if (page === currentPage) return false;
+    currentPage = page;
+    advanceMainPlayer();
+    mainVideo = null;
+    mainSource = "";
+    mainLinkPage = "";
+    lastPage = "";
+    for (const b of bubbles.values()) releaseBubble(b);
+    bubbles.clear();
+    return true;
+  }
+
+  const videoSource = (video) => video.currentSrc || video.src || "";
+  // YouTube can replace its MediaSource blob while adapting the same video.
+  // Its watch/embed URL identifies the video, so do not clear formats for
+  // an ordinary blob-to-blob switch at that unchanged page URL.
+  const sameYoutubeBlobVideo = (before, after) =>
+    /(^|\.)(youtube\.com|youtube-nocookie\.com)$/i.test(location.hostname) &&
+    isVideoPage(location.href) && /^blob:/i.test(before) && /^blob:/i.test(after);
+
+  function invalidateBubble(b) {
+    b.generation++;
+    b.own = null;
+    b.loading = false;
+    b.open = false;
+    b.help = false;
+    b.focusMenu = false;
+    b.dismissed = false;
+  }
+
+  // Feed players can be reused under a different post link even if a site
+  // keeps the same MediaSource URL. Re-evaluate links on player observation
+  // and on actions, not on every positioning frame.
+  function syncBubbleLink(b, href = linkFor(b.video)) {
+    const page = pageIdentity(href || location.href);
+    if (page === b.linkPage) return false;
+    b.linkPage = page;
+    if (b.video === mainVideo) mainLinkPage = page;
+    invalidateBubble(b);
+    return true;
+  }
+
+  // A site can reuse the same element for another video without changing the
+  // page URL. Do not interpret an empty transient source as a new video.
+  function syncVideo(b) {
+    const source = videoSource(b.video);
+    if (!source || source === b.source) return false;
+    if (!b.source) { b.source = source; return false; }
+    if (sameYoutubeBlobVideo(b.source, source)) { b.source = source; return false; }
+    b.source = source;
+    invalidateBubble(b);
+    if (!TOP) {
+      advanceMainPlayer();
+      if (mainVideo === b.video) mainSource = source;
+    }
+    return true;
+  }
+
+  function syncMainVideo(video = biggestVideo()) {
+    if (!video) return;
+    const source = videoSource(video);
+    const sameSource = source && mainSource && (source === mainSource || sameYoutubeBlobVideo(mainSource, source));
+    // Only inspect the nearby post link when the main element changes; this
+    // distinguishes reused media URLs in feeds without scanning on idle ticks.
+    const nextLink = video !== mainVideo ? pageIdentity(linkFor(video)) : mainLinkPage;
+    const changedPost = !!(mainVideo && mainLinkPage && nextLink && mainLinkPage !== nextLink);
+    if (mainVideo && ((video !== mainVideo && (!sameSource || changedPost)) || (source && mainSource && source !== mainSource && !sameSource))) {
+      advanceMainPlayer();
+    }
+    if (video !== mainVideo) mainSource = "";
+    mainVideo = video;
+    mainLinkPage = nextLink;
+    if (source) mainSource = source;
+  }
+
+  function currentBubble(b, generation, checkLink = generation != null) {
+    syncPage();
+    if (b.disposed || bubbles.get(b.video) !== b) return false;
+    // A known source may disappear briefly while a player replaces or
+    // reloads it. Block old actions until the source returns or a new one is
+    // known, without treating ordinary buffering as a new video.
+    if ((generation != null || checkLink) && b.source && !videoSource(b.video)) {
+      b.open = false;
+      b.help = false;
+      b.focusMenu = false;
+      renderOne(b);
+      return false;
+    }
+    const token = clientToken;
+    const changed = syncVideo(b);
+    syncMainVideo();
+    const linkChanged = checkLink && syncBubbleLink(b);
+    if (linkChanged && (!TOP || isMain(b.video)) && token === clientToken) advanceMainPlayer();
+    if (changed || linkChanged) renderOne(b);
+    return generation == null || b.generation === generation;
+  }
   // Scroll and resize invalidate cached hit tests; the existing placement
   // timer refreshes them occasionally for page changes without new polling.
   let placementEpoch = 0;
@@ -243,7 +397,7 @@
       if (!ch.enabled) return;
       switchedOn = ch.enabled.newValue !== false;
       if (!switchedOn) removeAll();
-      else chrome.runtime.sendMessage({ type: "swiftget-media-request" }, (res) => !chrome.runtime.lastError && update(res));
+      else requestMedia();
     });
   } catch (_) {
     // storage not reachable (add-in reloading): stays on
@@ -420,6 +574,8 @@
   }
 
   function releaseBubble(b) {
+    b.disposed = true;
+    b.generation++;
     b.cleanup?.();
     b.host.remove();
   }
@@ -445,7 +601,7 @@
             symbol("download", "ico download-symbol"), spin, el("span", { class: "visually-hidden", id: "label", text: "Download" }), el("span", { class: "visually-hidden", id: "count", "aria-hidden": "true" }))
         ), list)
     );
-    const b = { host, root, video, open: false, own: null, loading: false, dx: null, dy: null, help: false, focusMenu: false, actualZoom: zoom };
+    const b = { host, root, video, open: false, own: null, loading: false, dx: null, dy: null, help: false, focusMenu: false, actualZoom: zoom, source: videoSource(video), linkPage: pageIdentity(linkFor(video)), generation: 0, disposed: false };
     const grab = root.getElementById("grab");
     // Native button activation works for mouse, keyboard and assistive tech.
     // Dragging suppresses only the click generated by that same gesture.
@@ -516,22 +672,26 @@
   }
 
   function lookUp(b) {
+    if (!currentBubble(b, undefined, true)) return;
     if (isProtectedVideo(b)) { b.loading = false; b.open = true; renderOne(b); return; }
     // another video on the page (or nothing found for it yet): look it up now
     b.loading = true;
     b.open = true;
+    const generation = b.generation;
     renderOne(b, "Looking for the video qualities…");
     chrome.runtime.sendMessage(
       // its own post / video link, or its own file; the page only when
       // neither is there
       {
         type: "swiftget-resolve-video",
+        ...(TOP ? { clientToken } : { frameToken: clientToken }),
         // in a frame that is only a player: the add-in uses the page around it
         page: ownLink(b.video) || (directSrc(b.video) || !TOP ? "" : location.href),
         src: directSrc(b.video),
         frame: !TOP,
       },
       (res) => {
+        if (!currentBubble(b, generation)) return;
         b.loading = false;
         if (chrome.runtime.lastError || !res) return notRunning(b, () => lookUp(b));
         if (res.error) {
@@ -545,6 +705,7 @@
   }
 
   function clicked(b, keyboard = false) {
+    if (!currentBubble(b, undefined, true)) return;
     for (const other of bubbles.values()) if (other !== b && other.open) closeOne(other);
     b.focusMenu = keyboard;
     const list = itemsOf(b);
@@ -556,10 +717,13 @@
 
   // The app is closed: offer to open it, then do what the user wanted.
   function notRunning(b, retry) {
+    if (!currentBubble(b)) return;
+    const generation = b.generation;
     b.open = true;
     renderOne(b, "Mac Downloader is not running.", true, {
       text: "Open Mac Downloader",
       run: () => {
+        if (!currentBubble(b, generation)) return;
         // the program registers "ezoo-download:" when it is installed
         const a = document.createElement("a");
         a.href = "ezoo-download://open";
@@ -570,8 +734,10 @@
         renderOne(b, "Opening Mac Downloader…");
         let tries = 0;
         const wait = setInterval(() => {
+          if (!currentBubble(b, generation)) { clearInterval(wait); return; }
           tries++;
           chrome.runtime.sendMessage({ type: "swiftget-status" }, (res) => {
+            if (!currentBubble(b, generation)) { clearInterval(wait); return; }
             if (chrome.runtime.lastError) return;
             if (res && res.ok) {
               clearInterval(wait);
@@ -630,13 +796,17 @@
   }
 
   function sendPlaylist(b) {
+    if (!currentBubble(b, undefined, true)) return;
+    const generation = b.generation;
     chrome.runtime.sendMessage({ type: "swiftget-playlist", url: location.href }, (res) => {
+      if (!currentBubble(b, generation)) return;
       if (chrome.runtime.lastError || !res || !res.ok) return notRunning(b, () => sendPlaylist(b));
       flashOne(b, "Playlist opened in Mac Downloader.", false);
     });
   }
 
   function renderOne(b, note, isError, action) {
+    if (!currentBubble(b)) return;
     const list = itemsOf(b);
     const usable = list.filter((i) => !i.disabled);
     const busy = b.loading || (!usable.length && list.some((i) => i.disabled && /Getting/.test(i.label)));
@@ -741,7 +911,8 @@
         row.setAttribute("aria-disabled", String(!!m.disabled));
         if (!m.disabled) {
           row.appendChild(symbol("download", "ico accessory"));
-          row.addEventListener("click", () => download(b, m));
+          const generation = b.generation;
+          row.addEventListener("click", () => { if (currentBubble(b, generation)) download(b, m); });
         }
         group.appendChild(row);
       }
@@ -879,8 +1050,12 @@
   }
 
   function place() {
+    syncPage();
     if (!panelAllowed()) return;
-    const vids = allVideos().filter((v) => {
+    const videos = allVideos();
+    const main = biggestVideo(videos);
+    syncMainVideo(main);
+    const vids = videos.filter((v) => {
       const r = v.getBoundingClientRect();
       return r.width >= 200 && r.height >= 100;
     });
@@ -896,29 +1071,36 @@
     for (const v of vids.slice(0, 12)) {
       let b = bubbles.get(v);
       if (!b) {
-        const show = isMain(v) ? items.length || playing(v) : !(v.paused && !(v.duration > 3) && !directSrc(v));
+        const show = TOP && v === main ? items.length || playing(v) : !(v.paused && !(v.duration > 3) && !directSrc(v));
         if (!show) continue;
         b = makeBubble(v);
       }
+      if (syncVideo(b)) renderOne(b);
       if (!b.dismissed) placeOne(b);
     }
   }
 
   function flashOne(b, text, isError) {
+    if (!currentBubble(b)) return;
+    const generation = b.generation;
     b.open = true;
     renderOne(b, text, isError);
     setTimeout(() => {
+      if (!currentBubble(b, generation)) return;
       b.open = false;
       renderOne(b);
     }, 2500);
   }
 
   function download(b, m) {
+    if (!currentBubble(b, undefined, true) || !itemsOf(b).includes(m)) return;
     if (isProtectedVideo(b) || m.protected || m.type === "protected") { b.open = true; renderOne(b); return; }
+    const generation = b.generation;
     const fileName = `${cleanTitle()}.${m.ext || "mp4"}`;
     chrome.runtime.sendMessage(
-      { type: "swiftget-download", item: m, title: document.title, fileName, referrer: location.href },
+      { type: "swiftget-download", item: m, title: document.title, fileName, referrer: location.href, ...(TOP ? { clientToken } : { frameToken: clientToken }) },
       (res) => {
+        if (!currentBubble(b, generation)) return;
         if (chrome.runtime.lastError || !res || !res.ok) notRunning(b, () => download(b, m));
         else flashOne(b, "Sent to Mac Downloader.", false);
       }
@@ -927,6 +1109,7 @@
 
   function update(newItems) {
     if (!TOP) return; // frames look up their own videos
+    syncPage();
     items = newItems || [];
     if (!items.length) {
       // new page / new video: forget the bubbles and "hidden"
@@ -1014,6 +1197,18 @@
     // Only a message from this extension's background context can request or
     // announce fullscreen state. Pages and other content scripts cannot.
     const fromBackground = typeof chrome.runtime.id === "string" && !!chrome.runtime.id && sender?.id === chrome.runtime.id && !sender.tab;
+    if (msg.type === "swiftget-request-client-token") {
+      if (TOP && fromBackground) { syncPage(); syncMainVideo(); sendResponse({ clientToken }); }
+      return false;
+    }
+    if (msg.type === "swiftget-request-frame-generation") {
+      if (fromBackground) { syncPage(); syncMainVideo(); sendResponse({ frameToken: clientToken }); }
+      return false;
+    }
+    if (msg.type === "swiftget-refresh-current-player") {
+      if (TOP && fromBackground) { lastPage = ""; watchVideos(); }
+      return false;
+    }
     if (msg.type === "swiftget-read-top-fullscreen") {
       if (TOP && fromBackground) sendResponse({ fullscreen: localFullscreen() });
       return false;
@@ -1022,7 +1217,17 @@
       if (!TOP && fromBackground) syncTopFullscreen();
       return false;
     }
-    if (msg.type === "swiftget-media") update(msg.items);
+    if (msg.type === "swiftget-media") {
+      syncPage();
+      syncMainVideo();
+      if (msg.clientToken === clientToken) update(msg.items);
+      else if (TOP && fromBackground && !msg.clientToken && Date.now() - lastMediaHandshake >= 2000) {
+        // A restarted worker has forgotten its in-memory token. Ignore the
+        // untagged data and perform a bounded same-generation handshake.
+        lastMediaHandshake = Date.now();
+        requestMedia();
+      }
+    }
     if (msg.type === "swiftget-collect-links") {
       if (!TOP) return false; // the page itself answers
       sendResponse(collectLinks(!!msg.selection));
@@ -1068,9 +1273,7 @@
       true
     );
     // media detected before this script loaded
-    chrome.runtime.sendMessage({ type: "swiftget-media-request" }, (res) => {
-      if (!chrome.runtime.lastError) update(res);
-    });
+    requestMedia();
   }
 
   // Scroll/resize events can arrive in bursts, including from nested page
@@ -1090,6 +1293,11 @@
   addEventListener("resize", viewportChanged, { passive: true });
   setInterval(place, 700);
   setInterval(watchVideos, 1500);
-  document.addEventListener("play", () => setTimeout(() => (watchVideos(), place()), 300), true);
-  addEventListener("popstate", () => setTimeout(watchVideos, 500));
+  document.addEventListener("play", (event) => {
+    const path = event.composedPath?.() || [event.target];
+    const playedVideo = path.find((node) => node?.tagName === "VIDEO") || null;
+    setTimeout(() => (watchVideos(playedVideo), place()), 300);
+  }, true);
+  addEventListener("popstate", () => { syncPage(); setTimeout(watchVideos, 500); });
+  document.addEventListener("yt-navigate-finish", () => { syncPage(); watchVideos(); place(); });
 })();
