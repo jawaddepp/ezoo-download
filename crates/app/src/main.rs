@@ -149,7 +149,62 @@ pub(crate) struct Ctx {
 
 /// A progress window and its connections list (updated in place, so it
 /// doesn't flicker when refreshed 10 times a second).
-type ProgressWin = (DetailsDialog, Rc<VecModel<SegView>>);
+struct ProgressWin {
+    dialog: DetailsDialog,
+    segments: Rc<VecModel<SegView>>,
+    visibility: Rc<Cell<ProgressVisibility>>,
+}
+
+/// Automatic summaries are only useful while the main download list is out
+/// of the way. An explicitly opened inspector is a deliberate user request.
+#[derive(Clone, Copy, Debug)]
+struct ProgressVisibility {
+    automatic: bool,
+    suppressed: bool,
+    minimize_on_show: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressWindowAction {
+    Keep,
+    Hide,
+    Show { minimized: bool },
+}
+
+impl ProgressVisibility {
+    fn automatic(minimized: bool) -> Self {
+        Self { automatic: true, suppressed: true, minimize_on_show: minimized }
+    }
+
+    fn explicit() -> Self {
+        Self { automatic: false, suppressed: false, minimize_on_show: false }
+    }
+
+    fn set_details(&mut self, expanded: bool) {
+        self.automatic = !expanded;
+        self.suppressed = false;
+        self.minimize_on_show = false;
+    }
+
+    fn sync(&mut self, main_visible: bool, visible: bool, minimized: bool) -> ProgressWindowAction {
+        if !self.automatic {
+            return ProgressWindowAction::Keep;
+        }
+        if main_visible {
+            // A manually minimized window already stays out of the way. Do
+            // not restore it later as a side effect of showing the main list.
+            if visible && !minimized {
+                self.suppressed = true;
+                self.minimize_on_show = false;
+                return ProgressWindowAction::Hide;
+            }
+        } else if self.suppressed {
+            self.suppressed = false;
+            return ProgressWindowAction::Show { minimized: self.minimize_on_show };
+        }
+        ProgressWindowAction::Keep
+    }
+}
 
 /// Timed refreshes supplement immediate user-action refreshes. Always show the
 /// final active state, and rebuild a hidden list as soon as it is shown again.
@@ -478,7 +533,7 @@ fn main() -> anyhow::Result<()> {
         let weak_timer = Rc::downgrade(&fast_timer);
         fast_timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
             if let Some(timer) = weak_timer.upgrade() {
-                let visible_progress = ui.progress.borrow().values().any(|(d, _)| d.window().is_visible() && !d.window().is_minimized());
+                let visible_progress = ui.progress.borrow().values().any(|p| p.dialog.window().is_visible() && !p.dialog.window().is_minimized());
                 let exploring = ui.grabber.upgrade().is_some_and(|d| d.window().is_visible() && !d.window().is_minimized() && d.get_exploring());
                 let interval = if tray.is_some() || visible_progress || exploring {
                     Duration::from_millis(100)
@@ -1990,8 +2045,8 @@ pub(crate) fn apply_look(ui: &Ui, look: &Look) {
             set_theme_of(d.global::<Theme>(), look);
         }
     });
-    for (d, _) in ui.progress.borrow().values() {
-        set_theme_of(d.global::<Theme>(), look);
+    for p in ui.progress.borrow().values() {
+        set_theme_of(p.dialog.global::<Theme>(), look);
     }
     // the main window only: the picture behind it
     if let Some(m) = ui.ctx.main.upgrade() {
@@ -2514,13 +2569,8 @@ pub(crate) fn apply_duplicate(ui: &Ui, p: PendingAdd, choice: u32) {
 /// Progress window for a download that was just started (Options > Downloads).
 pub(crate) fn show_progress_for_start(ui: &Ui, id: u64) {
     match ui.ctx.mgr.settings().progress_mode {
-        0 => open_progress(ui, id),
-        1 => {
-            open_progress(ui, id);
-            if let Some((d, _)) = ui.progress.borrow().get(&id) {
-                d.window().set_minimized(true);
-            }
-        }
+        0 => open_progress_window(ui, id, Some(false)),
+        1 => open_progress_window(ui, id, Some(true)),
         _ => {}
     }
 }
@@ -3026,19 +3076,48 @@ pub(crate) fn refresh(ui: &Ui) {
 // ---------------------------------------------------------------- progress windows
 
 pub(crate) fn open_progress(ui: &Ui, id: u64) {
+    open_progress_window(ui, id, None);
+}
+
+fn main_downloads_visible(ui: &Ui) -> bool {
+    ui.ctx.main.upgrade().is_some_and(|m| m.window().is_visible() && !m.window().is_minimized())
+}
+
+/// `None` is an intentional Details action; `Some` is an automatic summary
+/// with the configured minimized preference.
+fn open_progress_window(ui: &Ui, id: u64, automatic_minimized: Option<bool>) {
     let Some(v) = ui.ctx.mgr.get(id) else { return };
-    if let Some((d, segs)) = ui.progress.borrow().get(&id) {
-        // back from next to the clock
-        tray::remove_download(id);
-        fill_details(d, segs, &v);
-        open_window!(d);
-        d.window().set_minimized(false);
+    if let Some(p) = ui.progress.borrow().get(&id) {
+        fill_details(&p.dialog, &p.segments, &v);
+        if automatic_minimized.is_none() {
+            tray::remove_download(id);
+            p.visibility.set(ProgressVisibility::explicit());
+            p.dialog.set_show_details(true);
+            resize_progress_window(&p.dialog, true);
+            open_window!(p.dialog);
+            p.dialog.window().set_minimized(false);
+        } else {
+            sync_progress_visibility(p, main_downloads_visible(ui));
+        }
         return;
     }
     let Ok(d) = DetailsDialog::new() else { return };
     d.set_native_frame(cfg!(target_os = "macos"));
+    let visibility = Rc::new(Cell::new(automatic_minimized.map(ProgressVisibility::automatic).unwrap_or_else(ProgressVisibility::explicit)));
+    d.set_show_details(automatic_minimized.is_none());
     let settings = ui.ctx.mgr.settings();
     set_theme_of(d.global::<Theme>(), &Look::of(&settings));
+    {
+        let (w, state) = (d.as_weak(), visibility.clone());
+        d.on_details_toggled(move |expanded| {
+            let mut presentation = state.get();
+            presentation.set_details(expanded);
+            state.set(presentation);
+            if let Some(d) = w.upgrade() {
+                resize_progress_window(&d, expanded);
+            }
+        });
+    }
     // the tabs' controls are set once, so typing in them isn't overwritten
     d.set_limit_on(v.speed_limit_kb.is_some());
     d.set_limit_kb(v.speed_limit_kb.unwrap_or(500).min(1_000_000) as i32);
@@ -3091,8 +3170,10 @@ pub(crate) fn open_progress(ui: &Ui, id: u64) {
     {
         // "Hide next to the clock": the window goes, a small icon with the
         // progress comes next to the clock, the download goes on
-        let (map, mgr, w) = (ui.progress.clone(), ui.ctx.mgr.clone(), d.as_weak());
+        let (map, mgr, w, state) = (ui.progress.clone(), ui.ctx.mgr.clone(), d.as_weak(), visibility.clone());
         d.on_hide_to_tray(move || {
+            // This is a user dismissal, not automatic suppression by the list.
+            state.set(ProgressVisibility::explicit());
             let Some(d) = w.upgrade() else { return };
             let (tip, progress) = mgr.get(id).map(|v| tray_tip(&v)).unwrap_or_default();
             if tray::show_download(id, &tip, progress, (&t("Show download progress"), &t("Stop download"))) {
@@ -3129,33 +3210,55 @@ pub(crate) fn open_progress(ui: &Ui, id: u64) {
         });
     }
     {
-        // its own X (title bar) does what the Windows X did: stop and close
-        let (map, mgr) = (ui.progress.clone(), ui.ctx.mgr.clone());
-        d.on_close_clicked(move || {
-            stop_and_close(&map, &mgr, id);
-        });
+        // Closing a progress view dismisses it; Pause is the explicit way to
+        // stop receiving data.
+        let map = ui.progress.clone();
+        d.on_close_clicked(move || close_progress(&map, id));
     }
     {
-        // Alt+F4: the same
-        let (map, mgr) = (ui.progress.clone(), ui.ctx.mgr.clone());
+        let map = ui.progress.clone();
         d.window().on_close_requested(move || {
-            stop_and_close(&map, &mgr, id);
+            close_progress(&map, id);
             slint::CloseRequestResponse::HideWindow
         });
     }
     let segs = Rc::new(VecModel::<SegView>::default());
     d.set_segs(ModelRc::from(segs.clone()));
     fill_details(&d, &segs, &v);
-    open_window!(d);
-    ui.progress.borrow_mut().insert(id, (d, segs));
+    resize_progress_window(&d, automatic_minimized.is_none());
+    let p = ProgressWin { dialog: d, segments: segs, visibility };
+    if automatic_minimized.is_none() {
+        open_window!(p.dialog);
+    } else {
+        sync_progress_visibility(&p, main_downloads_visible(ui));
+    }
+    ui.progress.borrow_mut().insert(id, p);
 }
 
-/// The X of a download's window: the download stops (it can be resumed).
-fn stop_and_close(map: &Rc<RefCell<HashMap<u64, ProgressWin>>>, mgr: &Arc<Manager>, id: u64) {
-    if mgr.get(id).is_some_and(|v| v.status != Status::Completed) {
-        mgr.pause(id);
+fn resize_progress_window(d: &DetailsDialog, expanded: bool) {
+    let scale = d.global::<Theme>().get_font_scale();
+    let current_width = d.window().size().width as f32 / d.window().scale_factor();
+    let width = if current_width > 1.0 { current_width } else { 560.0 * scale };
+    let min_width = 480.0 * scale;
+    let error_height = if d.get_error().is_empty() { 0.0 } else { 56.0 };
+    let height = if expanded { 560.0 } else { 252.0 + error_height } * scale;
+    d.window().set_size(slint::LogicalSize::new(width.max(min_width), height));
+}
+
+fn sync_progress_visibility(p: &ProgressWin, main_visible: bool) {
+    let mut state = p.visibility.get();
+    let action = state.sync(main_visible, p.dialog.window().is_visible(), p.dialog.window().is_minimized());
+    p.visibility.set(state);
+    match action {
+        ProgressWindowAction::Keep => {}
+        ProgressWindowAction::Hide => { let _ = p.dialog.hide(); }
+        ProgressWindowAction::Show { minimized } => {
+            // Restore in the background without repeatedly raising a window
+            // above the user's browser or their explicitly minimized window.
+            let _ = p.dialog.show();
+            p.dialog.window().set_minimized(minimized);
+        }
     }
-    close_progress(map, id);
 }
 
 /// The hint and the bar of a hidden download's icon next to the clock.
@@ -3177,8 +3280,8 @@ fn tray_tip(v: &DownloadView) -> (String, Option<f32>) {
 
 fn close_progress(map: &Rc<RefCell<HashMap<u64, ProgressWin>>>, id: u64) {
     tray::remove_download(id);
-    if let Some((d, _)) = map.borrow().get(&id) {
-        let _ = d.hide();
+    if let Some(p) = map.borrow().get(&id) {
+        let _ = p.dialog.hide();
     }
     let map = map.clone();
     slint::Timer::single_shot(Duration::from_millis(1), move || {
@@ -3187,6 +3290,7 @@ fn close_progress(map: &Rc<RefCell<HashMap<u64, ProgressWin>>>, id: u64) {
 }
 
 fn update_progress_windows(ui: &Ui) {
+    let main_visible = main_downloads_visible(ui);
     let ids: Vec<u64> = ui.progress.borrow().keys().copied().collect();
     for id in ids {
         match ui.ctx.mgr.get(id) {
@@ -3195,12 +3299,13 @@ fn update_progress_windows(ui: &Ui) {
             Some(v) => {
                 let (tip, progress) = tray_tip(&v);
                 tray::update_download(id, &tip, progress);
-                if let Some((d, segs)) = ui.progress.borrow().get(&id) {
-                    if d.window().is_visible() && !d.window().is_minimized() {
-                        fill_details(d, segs, &v);
+                if let Some(p) = ui.progress.borrow().get(&id) {
+                    sync_progress_visibility(p, main_visible);
+                    if p.dialog.window().is_visible() && !p.dialog.window().is_minimized() {
+                        fill_details(&p.dialog, &p.segments, &v);
                     }
                     // also on the window's taskbar button (seen when it is minimized)
-                    winfx::taskbar_progress(d.window(), taskbar_state(&v));
+                    winfx::taskbar_progress(p.dialog.window(), taskbar_state(&v));
                 }
             }
             None => close_progress(&ui.progress, id),
@@ -3232,7 +3337,8 @@ fn fill_details(d: &DetailsDialog, model: &VecModel<SegView>, v: &DownloadView) 
     let pct = v.progress();
     d.set_name(v.file_name.clone().into());
     d.set_kind(if v.kind == DownloadKind::Torrent { "torrent" } else { kind_for(&v.file_name) }.into());
-    d.set_percent(format!("{:.0}%", pct * 100.0).into());
+    let known_progress = v.total_size.is_some_and(|size| size > 0) || v.parts_total > 0;
+    d.set_percent(if known_progress { format!("{:.0}%", pct * 100.0) } else { "—".into() }.into());
     d.set_url(v.url.clone().into());
     let status = match v.status {
         _ if v.waiting => t("No internet connection - it will continue by itself when it is back…"),
@@ -3246,7 +3352,7 @@ fn fill_details(d: &DetailsDialog, model: &VecModel<SegView>, v: &DownloadView) 
     let done = if v.parts_total > 0 && v.total_size.is_none() {
         format!("{} ({}/{} parts)", fmt_size(v.downloaded), v.parts_done, v.parts_total)
     } else {
-        format!("{} ({:.2} %)", fmt_size(v.downloaded), pct * 100.0)
+        fmt_size(v.downloaded)
     };
     d.set_downloaded(done.into());
     let speed = if v.speed > 0.0 { format!("{}/s", fmt_size(v.speed as u64)) } else { "—".into() };
@@ -3394,6 +3500,52 @@ mod tests {
         let (selected, clear) = auth.for_destination("https://second.example/file.zip", true, &login.0, "new-synthetic-password");
         assert!(!clear);
         assert_eq!(selected, Some((login.0, "new-synthetic-password".into())));
+    }
+
+    #[test]
+    fn automatic_progress_follows_main_visibility_without_repeated_showing() {
+        use ProgressWindowAction::*;
+        let mut visibility = ProgressVisibility::automatic(false);
+        // A start from the Downloads window must not create a duplicate.
+        assert_eq!(visibility.sync(true, false, false), Keep);
+        assert_eq!(visibility.sync(true, false, false), Keep);
+        // Hiding/minimizing Downloads makes its summary useful, once.
+        assert_eq!(visibility.sync(false, false, false), Show { minimized: false });
+        assert_eq!(visibility.sync(false, true, false), Keep);
+        assert_eq!(visibility.sync(true, true, false), Hide);
+        assert_eq!(visibility.sync(true, false, false), Keep);
+        assert_eq!(visibility.sync(false, false, false), Show { minimized: false });
+    }
+
+    #[test]
+    fn collapsing_an_explicit_inspector_restores_summary_visibility_policy() {
+        use ProgressWindowAction::*;
+        let mut visibility = ProgressVisibility::explicit();
+        visibility.set_details(true);
+        assert_eq!(visibility.sync(true, true, false), Keep);
+        visibility.set_details(false);
+        assert_eq!(visibility.sync(true, true, false), Hide);
+        assert_eq!(visibility.sync(false, false, false), Show { minimized: false });
+        // Collapsing while Downloads is hidden does not raise it again.
+        visibility.set_details(true);
+        visibility.set_details(false);
+        assert_eq!(visibility.sync(false, true, false), Keep);
+    }
+
+    #[test]
+    fn minimized_and_explicitly_hidden_progress_is_not_revived() {
+        use ProgressWindowAction::*;
+        let mut visibility = ProgressVisibility::automatic(true);
+        assert_eq!(visibility.sync(true, false, false), Keep);
+        assert_eq!(visibility.sync(false, false, false), Show { minimized: true });
+        // Restoring the main list does not change a minimized window.
+        assert_eq!(visibility.sync(true, true, true), Keep);
+        assert_eq!(visibility.sync(false, true, true), Keep);
+        // Tray dismissal and explicit inspectors bypass automatic suppression.
+        let mut dismissed = ProgressVisibility::explicit();
+        assert_eq!(dismissed.sync(true, false, false), Keep);
+        assert_eq!(dismissed.sync(false, false, false), Keep);
+        assert_eq!(dismissed.sync(true, true, false), Keep);
     }
 
     #[test]

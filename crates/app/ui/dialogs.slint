@@ -2360,11 +2360,11 @@ export component SettingsDialog inherits ThemedWindow {
                     HorizontalLayout {
                         spacing: 8px;
                         Label {
-                            text: @tr("Show the download progress window");
+                            text: @tr("Background progress window");
                         }
                         ComboBox {
-                            width: 160px;
-                            model: [@tr("Normally"), @tr("Minimized"), @tr("Don't show")];
+                            width: 230px;
+                            model: [@tr("When Downloads Is Hidden"), @tr("Minimized"), @tr("Don't Show")];
                             current-index <=> root.progress-mode;
                         }
                         Rectangle {
