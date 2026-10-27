@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'content.js'), 'utf8');
 
-function fixture({ url = 'https://example.test/watch', items = formats(), appRunning = true, topFrame = true, topFullscreen = false, topAvailable = true, deferFullscreen = false, deferResolve = false, initialSource = 'https://cdn.example.test/clip.mp4', initialLink = '' } = {}) {
+function fixture({ url = 'https://example.test/watch', items = formats(), resolveItems = items, appRunning = true, topFrame = true, topFullscreen = false, topAvailable = true, deferFullscreen = false, deferResolve = false, initialSource = 'https://cdn.example.test/clip.mp4', initialLink = '' } = {}) {
   const events = new Map(), intervals = new Map(), timeouts = [], frames = [], messages = [], storageListeners = [], runtimeListeners = [];
   const pendingFullscreen = [];
   const pendingResolves = [];
@@ -101,7 +101,7 @@ function fixture({ url = 'https://example.test/watch', items = formats(), appRun
         }
         const response = message.type === 'swiftget-config' ? { enabled: true, skipSites: [] }
           : message.type === 'swiftget-media-request' ? items
-          : message.type === 'swiftget-resolve-video' ? { items }
+          : message.type === 'swiftget-resolve-video' ? { items: resolveItems }
           : { ok: appRunning };
         cb?.(response); return Promise.resolve(response);
       },
@@ -355,6 +355,102 @@ function formats() {
   f.video.rect = { left: -620, top: 80, right: 20, bottom: 440, width: 640, height: 360 };
   f.global('scroll'); assert.equal(host.style.display, 'none', 'a nearly offscreen player does not leave a detached widget');
 }
+function laneFixture() {
+  const f = fixture({ url: 'https://www.youtube.com/watch?v=synthetic' }), host = f.hosts()[0];
+  let inline = '', priority = '', scrollOffset = 0;
+  const style = { getPropertyValue: () => inline, getPropertyPriority: () => priority,
+    setProperty(_key, value, p = '') { inline = value; priority = p; }, removeProperty() { inline = ''; priority = ''; } };
+  const offset = () => inline ? Number.parseFloat(inline) : 0;
+  const player = { isConnected: true, style, getBoundingClientRect: () => ({ left: 0, top: 68 + offset() + scrollOffset, right: 1000, bottom: 630 + offset() + scrollOffset, width: 1000, height: 562 }) };
+  f.video.closest = selector => selector === '#player' ? player : null;
+  f.video.getBoundingClientRect = () => player.getBoundingClientRect();
+  f.ctx.getComputedStyle = () => ({ marginTop: '0px', display: 'block', position: 'relative' });
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  f.document.elementsFromPoint = (_x, y) => y < 56 ? [{ closest: () => header }] : [];
+  return { f, host, player, inline: () => inline, scroll(value) { scrollOffset = value; f.global('scroll'); } };
+}
+{
+  const { f, host, player, inline, scroll } = laneFixture();
+  f.global('scroll');
+  f.change({ bubbleScale: { newValue: 2 } });
+  assert.equal(inline(), '92px', 'a 200% widget has enough reserved space');
+  assert(Number.parseFloat(host.style.top) + 84 <= player.getBoundingClientRect().top, 'the enlarged widget stays above the video');
+  f.change({ bubbleScale: { newValue: 0.5 } });
+  assert.equal(inline(), '29px', 'the lane shrinks for a 50% widget');
+  assert(Number.parseFloat(host.style.top) + 21 <= player.getBoundingClientRect().top, 'the smaller widget stays above the video');
+  scroll(-1000); f.tick(700);
+  assert.equal(inline(), '29px', 'scrolling the player offscreen does not change page layout');
+  scroll(0);
+  assert.equal(inline(), '29px', 'the reserved space remains stable when scrolling back');
+}
+{
+  const { f, host, player, inline } = laneFixture();
+  f.global('scroll');
+  assert.equal(inline(), '50px', 'a 50px flow lane is reserved above the player');
+  assert.equal(host.style.display, 'block');
+  const top = Number.parseFloat(host.style.top);
+  assert(top >= 68 && top + 42 <= player.getBoundingClientRect().top, 'the button fits in the lane and stays outside the video and header');
+  f.tick(700); f.tick(700); f.tick(700);
+  assert.equal(inline(), '50px', 'placement does not accumulate margins');
+  f.ctx.Date = { now: () => Date.now() + 3000 };
+  f.tick(700);
+  assert.equal(Number.parseFloat(host.style.top), top, 'the button does not shift when its placement cache expires');
+  f.document.fullscreenElement = f.document.documentElement;
+  f.document.emit('fullscreenchange');
+  assert.equal(inline(), '', 'fullscreen restores the page layout');
+  assert.equal(host.style.display, 'none');
+  f.document.fullscreenElement = null;
+  f.document.emit('fullscreenchange');
+  assert.equal(inline(), '50px', 'the lane returns after fullscreen');
+  f.change({ enabled: { newValue: false } });
+  assert.equal(inline(), '', 'disabling integration restores the page layout');
+}
+{
+  const { f, inline } = laneFixture();
+  f.global('scroll');
+  f.video.webkitDisplayingFullscreen = true;
+  f.document.emit('webkitbeginfullscreen');
+  assert.equal(inline(), '', 'native video fullscreen immediately restores the page layout');
+  f.flush();
+  f.video.webkitDisplayingFullscreen = false;
+  f.document.emit('webkitendfullscreen'); f.flush();
+  assert.equal(inline(), '50px', 'the lane returns after native video fullscreen');
+}
+{
+  const { f, inline } = laneFixture();
+  f.global('scroll');
+  let secondaryWrites = 0;
+  const secondaryPlayer = { isConnected: true, style: { getPropertyValue: () => '', getPropertyPriority: () => '', setProperty: () => { secondaryWrites++; } } };
+  const secondary = f.document.createElement('video');
+  Object.assign(secondary, { duration: 60, paused: false, ended: false, currentSrc: 'https://cdn.example.test/secondary.mp4', src: '', tabIndex: 0,
+    rect: { left: 0, top: 68, right: 300, bottom: 268, width: 300, height: 200 } });
+  secondary.closest = () => secondaryPlayer;
+  f.document.documentElement.appendChild(secondary);
+  f.tick(700); f.tick(700); f.tick(700);
+  assert.equal(secondaryWrites, 0, 'secondary players cannot reserve or alternate the main player lane');
+  assert.equal(inline(), '50px');
+}
+{
+  const { f, player, inline } = laneFixture();
+  f.global('scroll');
+  player.style.setProperty('margin-top', '75px');
+  f.change({ enabled: { newValue: false } });
+  assert.equal(inline(), '75px', 'cleanup never overwrites a site or user style change');
+}
+{
+  const { f, inline } = laneFixture();
+  f.global('scroll');
+  f.ctx.location.href = 'https://www.youtube.com/watch?v=next';
+  f.global('popstate');
+  assert.equal(inline(), '', 'SPA navigation restores the old player layout');
+}
+{
+  const { f, inline } = laneFixture();
+  f.global('scroll');
+  f.video.remove();
+  f.tick(700);
+  assert.equal(inline(), '', 'removing the player restores its lane without waiting for navigation');
+}
 {
   const f = fixture(), host = f.hosts()[0], root = f.root();
   f.ctx.innerWidth = 400;
@@ -420,6 +516,68 @@ for (const url of ['https://notnetflix.com/watch/12345', 'https://netflix.com.ex
   assert(f.root().querySelectorAll('.item').length > 0, 'Netflix guard requires its real hostname and watch path: ' + url);
 }
 {
+  const f = fixture({ url: 'https://example.test/feed' });
+  assert.equal(f.hosts().length, 1);
+  f.tick(1500); f.tick(700); f.tick(1500);
+  assert(!f.messages.some(m => m.type === 'swiftget-player-changed'), 'a no-link page does not reset an unchanged player on its first observation');
+  assert.equal(f.hosts().length, 1, 'the existing control remains visible on the unchanged page');
+}
+for (const [paused, duration] of [[true, 60], [false, NaN], [false, Infinity]]) {
+  const f = fixture({ url: 'https://example.test/feed' });
+  const host = f.hosts()[0], root = f.root();
+  root.getElementById('grab').click();
+  const oldRow = root.querySelector('.item');
+  f.video.paused = paused; f.video.duration = duration;
+  f.send({ type: 'swiftget-media', items: [] });
+  assert.equal(f.hosts()[0], host, 'an empty media update retains the current widget');
+  assert.equal(root.getElementById('list').hidden, true, 'stale format choices close while formats load');
+  oldRow.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'an old choice cannot be downloaded after an empty update');
+  f.tick(700); f.tick(1500);
+  assert.equal(f.hosts()[0], host, 'paused, loading, and live videos keep their widget');
+}
+for (const deferred of [false, true]) {
+  const f = fixture({ url: 'https://example.test/feed', deferResolve: deferred });
+  const secondary = f.document.createElement('video');
+  Object.assign(secondary, { duration: 60, paused: false, ended: false, currentSrc: 'https://cdn.example.test/secondary.mp4', src: '', tabIndex: 0,
+    rect: { left: 30, top: 450, right: 330, bottom: 650, width: 300, height: 200 } });
+  f.document.documentElement.appendChild(secondary); f.tick(700);
+  const root = f.hosts()[1]._shadow;
+  root.getElementById('grab').click();
+  if (!deferred) assert(root.querySelector('.item'), 'secondary has its independent options');
+  f.send({ type: 'swiftget-media', items: [] });
+  assert.equal(root.getElementById('list').hidden, false, 'empty global media preserves the secondary menu');
+  if (deferred) f.resolveVideo(0, { items: [{ label: 'Secondary format', url: 'https://cdn.example.test/secondary.mp4', ext: 'mp4' }] });
+  assert(root.querySelector('.item'), 'secondary options remain available after an empty global update');
+  root.querySelector('.item').click();
+  assert(f.messages.some(m => m.type === 'swiftget-download'), 'current secondary video stays downloadable');
+}
+for (const deferred of [false, true]) {
+  const f = fixture({ url: 'https://example.test/feed', items: [], resolveItems: formats(), deferResolve: deferred });
+  f.tick(700);
+  const root = f.root();
+  root.getElementById('grab').click();
+  if (!deferred) assert(root.querySelector('.item'), 'main player has its independently resolved options');
+  f.send({ type: 'swiftget-media', items: [] });
+  assert.equal(root.getElementById('list').hidden, false, 'empty global media preserves the current main-player menu');
+  if (deferred) f.resolveVideo(0, { items: [{ label: 'Current format', url: 'https://cdn.example.test/current.mp4', ext: 'mp4' }] });
+  assert(root.querySelector('.item'), 'current main lookup remains valid after an empty snapshot');
+  root.querySelector('.item').click();
+  assert(f.messages.some(m => m.type === 'swiftget-download'), 'current independently resolved main format is usable');
+}
+{
+  const f = fixture({ url: 'https://example.test/feed', items: [], deferResolve: true });
+  f.tick(700);
+  const root = f.root();
+  root.getElementById('grab').click();
+  f.video.currentSrc = 'https://cdn.example.test/replacement.mp4';
+  f.tick(700);
+  f.send({ type: 'swiftget-media', items: [] });
+  f.resolveVideo(0, { items: [{ label: 'Stale format', url: 'https://cdn.example.test/old.mp4', ext: 'mp4' }] });
+  assert(!root.querySelector('.item') || !root.querySelector('.item').textContent.includes('Stale format'), 'source changes still reject old main-player lookups');
+  assert(!f.messages.some(m => m.type === 'swiftget-download'));
+}
+{
   const f = fixture();
   const root = f.root();
   root.getElementById('grab').click();
@@ -450,6 +608,11 @@ for (const url of ['https://notnetflix.com/watch/12345', 'https://netflix.com.ex
   assert(!f.messages.some(m => m.type === 'swiftget-download'), 'source replacement cannot download the previous format');
   const reset = [...f.messages].reverse().find(m => m.type === 'swiftget-player-changed');
   assert(reset && reset.clientToken !== oldToken, 'reused main player gets a new opaque generation');
+  const host = f.hosts()[0];
+  f.send({ type: 'swiftget-media', clientToken: reset.clientToken, items: [] });
+  assert.equal(f.hosts()[0], host, 'a real video switch clears stale choices without hiding the widget');
+  oldRow.click();
+  assert(!f.messages.some(m => m.type === 'swiftget-download'), 'empty update does not revive stale choices after a real switch');
   f.send({ type: 'swiftget-media', clientToken: oldToken, items: formats() });
   assert.equal(root.getElementById('list').hidden, true);
   f.send({ type: 'swiftget-media', clientToken: reset.clientToken, items: [{ label: 'Replacement video', ext: 'mp4', url: 'https://cdn.example.test/next.mp4' }] });
