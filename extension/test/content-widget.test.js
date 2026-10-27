@@ -357,9 +357,9 @@ function formats() {
 }
 function laneFixture() {
   const f = fixture({ url: 'https://www.youtube.com/watch?v=synthetic' }), host = f.hosts()[0];
-  let inline = '', priority = '', scrollOffset = 0;
+  let inline = '', priority = '', scrollOffset = 0, writes = 0;
   const style = { getPropertyValue: () => inline, getPropertyPriority: () => priority,
-    setProperty(_key, value, p = '') { inline = value; priority = p; }, removeProperty() { inline = ''; priority = ''; } };
+    setProperty(_key, value, p = '') { writes++; inline = value; priority = p; }, removeProperty() { writes++; inline = ''; priority = ''; } };
   const offset = () => inline ? Number.parseFloat(inline) : 0;
   const player = { isConnected: true, style, getBoundingClientRect: () => ({ left: 0, top: 68 + offset() + scrollOffset, right: 1000, bottom: 630 + offset() + scrollOffset, width: 1000, height: 562 }) };
   f.video.closest = selector => selector === '#player' ? player : null;
@@ -367,7 +367,7 @@ function laneFixture() {
   f.ctx.getComputedStyle = () => ({ marginTop: '0px', display: 'block', position: 'relative' });
   const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
   f.document.elementsFromPoint = (_x, y) => y < 56 ? [{ closest: () => header }] : [];
-  return { f, host, player, inline: () => inline, scroll(value) { scrollOffset = value; f.global('scroll'); } };
+  return { f, host, player, inline: () => inline, writes: () => writes, scroll(value) { scrollOffset = value; f.global('scroll'); } };
 }
 {
   const { f, host, player, inline, scroll } = laneFixture();
@@ -450,6 +450,89 @@ function laneFixture() {
   f.video.remove();
   f.tick(700);
   assert.equal(inline(), '', 'removing the player restores its lane without waiting for navigation');
+}
+{
+  const { f, host, inline, writes } = laneFixture();
+  let blocked = true, now = Date.now();
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  const overlay = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 720 }) };
+  f.document.elementsFromPoint = (_x, y) => y < 56 ? [{ closest: () => header }] : blocked ? [{ closest: () => overlay }] : [];
+  f.ctx.Date = { now: () => now };
+  f.global('scroll');
+  assert.equal(writes(), 0, 'a blocked projected lane does not mutate page margins');
+  for (let i = 0; i < 4; i++) { now += 3000; f.tick(700); }
+  assert.equal(writes(), 0, 'an unchanged blocker never causes repeated page mutations');
+  blocked = false; now += 3000; f.tick(700);
+  assert.equal(inline(), '50px', 'the lane recovers after a blocker disappears');
+  assert.equal(host.style.display, 'block');
+}
+{
+  const { f, player, inline } = laneFixture();
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  const fixed = { parentElement: player, getBoundingClientRect: () => ({ left: 800, right: 1000, top: 56, bottom: 130 }), contains: () => false };
+  player.contains = node => node === fixed;
+  f.ctx.getComputedStyle = node => node === fixed ? { position: 'fixed' } : { marginTop: '0px', display: 'block', position: 'relative' };
+  f.document.elementsFromPoint = (x, y) => y < 56 ? [{ closest: () => header }] : x >= 800 && y < 130 ? [{ closest: () => fixed }] : [];
+  f.global('scroll');
+  assert.equal(inline(), '', 'fixed player descendants remain blockers for the projected gap');
+}
+{
+  const { f, inline, writes } = laneFixture();
+  let now = Date.now(), pointerEvents = 'auto';
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  const overlay = { isConnected: true, getBoundingClientRect: () => ({ left: 0, top: 56, right: 1000, bottom: 720 }) };
+  f.ctx.getComputedStyle = node => node === overlay ? { position: 'fixed', pointerEvents, zIndex: '10' } : { marginTop: '0px', display: 'block', position: 'relative' };
+  f.document.elementsFromPoint = (_x, y) => y < 56 ? [{ closest: () => header }] : pointerEvents === 'auto' && inline() ? [{ closest: () => overlay }] : [];
+  f.ctx.Date = { now: () => now };
+  f.global('scroll');
+  const initialWrites = writes();
+  now += 3000; f.tick(700);
+  assert.equal(writes(), initialWrites, 'an unchanged pointer-interactive blocker is not retried');
+  pointerEvents = 'none'; now += 3000; f.tick(700);
+  assert.equal(inline(), '50px', 'a blocker becoming non-hit-testable allows recovery');
+}
+{
+  const { f, player, writes, inline } = laneFixture();
+  let now = Date.now();
+  f.ctx.Date = { now: () => now };
+  player.getBoundingClientRect = () => ({ left: 0, top: 68, right: 1000, bottom: 630, width: 1000, height: 562 });
+  f.global('scroll');
+  assert.equal(inline(), '', 'an unsupported layout restores its margin');
+  const initialWrites = writes();
+  assert(initialWrites > 0);
+  for (let i = 0; i < 4; i++) { now += 3000; f.tick(700); }
+  assert.equal(writes(), initialWrites, 'an unchanged unsupported layout is not repeatedly mutated');
+  for (let i = 0; i < 3; i++) f.global('scroll');
+  assert.equal(writes(), initialWrites, 'scroll events with unchanged player geometry do not retry mutations');
+  f.ctx.innerWidth = 960;
+  f.global('resize');
+  assert(writes() > initialWrites, 'a meaningful viewport change permits retry');
+}
+{
+  const { f, host, player, inline } = laneFixture();
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  const control = { parentElement: player, getBoundingClientRect: () => ({ left: 800, right: 1000, top: player.getBoundingClientRect().top, bottom: player.getBoundingClientRect().top + 50 }), contains: () => false };
+  player.contains = node => node === control;
+  f.document.elementsFromPoint = (x, y) => y < 56 ? [{ closest: () => header }] : x >= 800 && y >= player.getBoundingClientRect().top && y < player.getBoundingClientRect().top + 50 ? [{ closest: () => control }] : [];
+  f.global('scroll');
+  assert.equal(inline(), '50px', 'normal player controls moving with the player do not block the projected gap');
+  assert.equal(host.style.display, 'block');
+}
+{
+  const { f, host, inline, writes } = laneFixture();
+  let now = Date.now();
+  const header = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 1000, bottom: 56 }) };
+  const overlay = { isConnected: true, getBoundingClientRect: () => ({ left: 0, top: 56, right: 1000, bottom: 720 }) };
+  f.document.elementsFromPoint = (_x, y) => y < 56 ? [{ closest: () => header }] : overlay.isConnected && inline() ? [{ closest: () => overlay }] : [];
+  f.ctx.Date = { now: () => now };
+  f.global('scroll');
+  assert.equal(inline(), '');
+  const initialWrites = writes();
+  for (let i = 0; i < 3; i++) { now += 3000; f.tick(700); }
+  assert.equal(writes(), initialWrites, 'a stable post-layout blocker causes no repeated margin writes');
+  overlay.isConnected = false; now += 3000; f.tick(700);
+  assert.equal(inline(), '50px', 'removing a post-layout blocker allows recovery');
+  assert.equal(host.style.display, 'block');
 }
 {
   const f = fixture(), host = f.hosts()[0], root = f.root();

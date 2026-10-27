@@ -945,7 +945,22 @@
       rect.bottom > y && rect.top < y + h;
   }
 
-  function clearOutside(b, x, y, w, h) {
+  function movesWithPlayer(player, element, blocker) {
+    let node = player?.contains?.(element) ? element : player?.contains?.(blocker) ? blocker : null;
+    if (!node) return false;
+    // Fixed or sticky descendants may remain in the projected lane even
+    // though their containing player moves. Treat them as real blockers.
+    while (node && node !== player) {
+      try {
+        const position = getComputedStyle(node).position;
+        if (position === 'fixed' || position === 'sticky') return false;
+      } catch (_) { return false; }
+      node = node.parentElement;
+    }
+    return node === player;
+  }
+
+  function clearOutside(b, x, y, w, h, options = {}) {
     if (x < 4 || y < 4 || x + w > innerWidth - 4 || y + h > innerHeight - 4) return false;
     if (typeof document.elementsFromPoint !== "function") return true;
     const points = [[x + w / 2, y + h / 2], [x + 2, y + 2], [x + w - 2, y + h - 2]];
@@ -954,10 +969,21 @@
         if (element === b.host || element === b.video || element === document.documentElement || element === document.body) continue;
         const blocker = element.closest?.(OCCUPIED);
         if (!blocker || blocker === b.host || blocker === b.video || blocker.contains?.(b.video) || blocker.contains?.(b.host)) continue;
-        if (intersects(blocker.getBoundingClientRect(), x, y, w, h)) return false;
+        if (options.movingPlayer && movesWithPlayer(options.movingPlayer, element, blocker)) continue;
+        if (intersects(blocker.getBoundingClientRect(), x, y, w, h)) { options.onBlock?.(blocker); return false; }
       }
     }
     return true;
+  }
+
+  function blockerState(blocker) {
+    if (!blocker) return '';
+    try {
+      const r = blocker.getBoundingClientRect();
+      const style = getComputedStyle(blocker);
+      return [blocker.isConnected, r.left, r.top, r.right, r.bottom,
+        style.display, style.visibility, style.opacity, style.position, style.pointerEvents, style.zIndex].join('/');
+    } catch (_) { return 'unavailable'; }
   }
 
   function pageHeaderBottom(x) {
@@ -1026,20 +1052,43 @@
           style.display === 'none' || style.position === 'absolute' || style.position === 'fixed') return null;
       const before = player.style.getPropertyValue('margin-top');
       const priority = player.style.getPropertyPriority('margin-top');
-      const oldTop = player.getBoundingClientRect().top;
+      const beforeRect = player.getBoundingClientRect();
+      const videoRect = b.video.getBoundingClientRect();
       const size = Math.ceil(h + 8);
+      const fingerprint = [beforeRect.left, beforeRect.top, beforeRect.right, beforeRect.bottom,
+        videoRect.left, videoRect.top, videoRect.right, videoRect.bottom, innerWidth, innerHeight,
+        w, h, margin, before, priority].join('/');
+      const oldTop = beforeRect.top;
+      const x = Math.max(4, Math.min(innerWidth - w - 4, beforeRect.right - w - 8));
+      const y = oldTop + size - h - 4;
+      // A blocked predicted lane needs no page mutation. Recheck the
+      // obstruction on the existing placement timer so removing it recovers.
+      const clear = y >= 4 && y + h <= videoRect.top + size && clearOutside(b, x, y, w, h, { movingPlayer: player });
+      if (b.failedLane?.player === player && b.failedLane.fingerprint === fingerprint &&
+          ((b.failedLane.reason === 'preflight' && !clear) || b.failedLane.reason === 'layout' ||
+           (b.failedLane.reason === 'blocked' && blockerState(b.failedLane.blocker) === b.failedLane.blockerState))) return null;
+      if (!clear) { b.failedLane = { player, fingerprint, reason: 'preflight' }; return null; }
+      b.failedLane = null;
       player.style.setProperty('margin-top', `${margin + size}px`, priority);
       reservedLane = { node: player, video: b.video, before, priority, applied: player.style.getPropertyValue('margin-top'),
         appliedPriority: player.style.getPropertyPriority('margin-top'), baseMargin: margin, size };
       created = true;
-      if (Math.abs(player.getBoundingClientRect().top - oldTop - size) > 1) { restoreLane(); return null; }
+      if (Math.abs(player.getBoundingClientRect().top - oldTop - size) > 1) {
+        restoreLane(); b.failedLane = { player, fingerprint, reason: 'layout' }; return null;
+      }
+      reservedLane.attemptFingerprint = fingerprint;
     }
     const r = player.getBoundingClientRect();
     const video = b.video.getBoundingClientRect();
     const x = Math.max(4, Math.min(innerWidth - w - 4, r.right - w - 8));
     const y = r.top - h - 4;
-    if (y < 4 || y + h > video.top || !clearOutside(b, x, y, w, h)) {
-      if (created) restoreLane();
+    let blocker = null;
+    if (y < 4 || y + h > video.top || !clearOutside(b, x, y, w, h, { onBlock: node => { blocker = node; } })) {
+      if (created) {
+        const fingerprint = reservedLane.attemptFingerprint;
+        restoreLane();
+        b.failedLane = { player, fingerprint, reason: 'blocked', blocker, blockerState: blockerState(blocker) };
+      }
       return null;
     }
     return { name: 'lane', x, y };
