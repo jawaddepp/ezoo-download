@@ -551,12 +551,50 @@ for (const url of ['https://notnetflix.com/watch/12345', 'https://netflix.com.ex
   second.flush();
   assert.equal(seen(second).length, secondCount + 1, 'starting a preloaded embedded video reannounces that frame');
   assert.equal(seen(second).at(-1).frameToken, token, 'playback of the same video keeps its generation');
+  assert.equal(seen(second).at(-1).activeSelection, true);
+  assert(Number.isFinite(seen(second).at(-1).selectedAt));
   assert.equal(seen(first).length, firstCount, 'another embedded frame is not reannounced');
+  first.document.emit('play', { target: first.video, composedPath: () => [first.video] });
+  first.flush();
+  assert.equal(seen(first).length, firstCount + 1, 'switching back to a preloaded frame reannounces it');
+  assert.equal(seen(first).at(-1).activeSelection, true);
   const afterPlay = seen(second).length;
   second.video.duration = 2;
   second.document.emit('play', { target: second.video, composedPath: () => [second.video] });
   second.flush();
   assert.equal(seen(second).length, afterPlay, 'a tiny background loop does not steal the active video');
+  const top = fixture({ topFrame: true, url: 'https://example.test/feed' });
+  top.tick(700); top.tick(1500);
+  const topCount = seen(top).length;
+  top.document.emit('play', { target: top.video, composedPath: () => [top.video] });
+  top.flush();
+  assert.equal(seen(top).length, topCount + 1, 'playing the top-frame video reselects it after an embed');
+  assert.equal(seen(top).at(-1).activeSelection, true);
+  assert(seen(top).at(-1).clientToken && Number.isFinite(seen(top).at(-1).selectedAt));
+}
+{
+  const paused = fixture({ topFrame: false, url: 'https://example.test/embed/a' });
+  paused.video.paused = true;
+  const playing = fixture({ topFrame: false, url: 'https://example.test/embed/b' });
+  paused.tick(700); paused.tick(1500); playing.tick(700); playing.tick(1500);
+  const seen = f => f.messages.filter(m => m.type === 'swiftget-video-seen');
+  assert(!seen(paused).at(-1).observedPlaying, 'a paused preloaded player remains passive');
+  assert.equal(seen(playing).at(-1).observedPlaying, true, 'already-playing embedded video is observed at startup');
+  assert(!seen(playing).at(-1).activeSelection, 'initial observation is not mistaken for an actual play event');
+  const count = seen(playing).length;
+  playing.tick(1500); playing.tick(1500);
+  assert.equal(seen(playing).length, count, 'normal polling does not repeatedly announce playback');
+  playing.send({ type: 'swiftget-refresh-current-player' }, { id: 'foreign-extension' });
+  assert.equal(seen(playing).length, count, 'foreign senders cannot request recovery');
+  playing.send({ type: 'swiftget-refresh-current-player' }, { id: 'synthetic-extension' });
+  assert.equal(seen(playing).length, count + 1);
+  assert.equal(seen(playing).at(-1).observedPlaying, true, 'worker recovery can reannounce an active embed');
+  playing.video.muted = true;
+  playing.send({ type: 'swiftget-refresh-current-player' }, { id: 'synthetic-extension' });
+  assert.equal(seen(playing).at(-1).observedPlaying, true, 'a visible, long muted video is available after recovery');
+  playing.video.muted = false; playing.video.duration = 2;
+  playing.send({ type: 'swiftget-refresh-current-player' }, { id: 'synthetic-extension' });
+  assert(!seen(playing).at(-1).observedPlaying, 'short loops are not treated as a selection');
 }
 {
   const f = fixture({ topFrame: false, deferResolve: true });

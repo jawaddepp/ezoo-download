@@ -29,7 +29,7 @@ class Element {
 async function page(name, { store = {}, items = [], online = true, preparedPort = undefined, title = "Calm: <Coast>?", url = "https://example.test/watch" } = {}) {
   const all = [], ids = {}, messages = [], writes = [];
   const tabUpdated = [], tabActivated = [], tabRemoved = [], runtimeListeners = [], pendingMedia = [], pendingDownloads = [];
-  let activeTab = { id: 7, title, url }, currentItems = items, clientToken = 'token-a', deferMedia = false, deferDownload = false;
+  let activeTab = { id: 7, title, url }, currentItems = items, clientToken = 'token-a', selectionVersion = 0, deferMedia = false, deferDownload = false;
   const html = fs.readFileSync(path.join(extension, `${name}.html`), "utf8");
   for (const match of html.matchAll(/id="([^"]+)"/g)) ids[match[1]] = new Element("existing", all);
   const document = { body: new Element("body", all), getElementById: (id) => { assert(ids[id], `missing HTML id ${id}`); return ids[id]; }, createElement: (tag) => new Element(tag, all), createElementNS: (_, tag) => new Element(tag, all), querySelectorAll: (selector) => {
@@ -44,7 +44,7 @@ async function page(name, { store = {}, items = [], online = true, preparedPort 
     tabs: { query: async () => [{ ...activeTab }], onUpdated: { addListener(fn) { tabUpdated.push(fn); } }, onActivated: { addListener(fn) { tabActivated.push(fn); } }, onRemoved: { addListener(fn) { tabRemoved.push(fn); } } },
     runtime: { id: 'synthetic-extension', onMessage: { addListener(fn) { runtimeListeners.push(fn); } }, getURL: (part) => `chrome-extension://synthetic/${part}`, openOptionsPage: () => { opened++; }, sendMessage: (message, callback) => {
       messages.push(message);
-      const result = message.type === "swiftget-get-media" ? { items: currentItems, clientToken, tabId: message.tabId } : { ok: online };
+      const result = message.type === "swiftget-get-media" ? { items: currentItems, clientToken, selectionVersion, tabId: message.tabId } : { ok: online };
       if (message.type === "swiftget-get-media" && deferMedia) pendingMedia.push(() => callback(result));
       else if (message.type === "swiftget-download" && deferDownload) pendingDownloads.push(() => callback(result));
       else queueMicrotask(() => callback(result));
@@ -54,11 +54,11 @@ async function page(name, { store = {}, items = [], online = true, preparedPort 
   await vm.runInNewContext(fs.readFileSync(path.join(extension, `${name}.js`), "utf8"), sandbox);
   return { ids, all, messages, writes, document, store, opened: () => opened, closed: () => closed,
     setTab(next) { activeTab = { ...activeTab, ...next }; },
-    setMedia(next, token) { currentItems = next; clientToken = token; },
+    setMedia(next, token, version = selectionVersion) { currentItems = next; clientToken = token; selectionVersion = version; },
     emitUpdated(change) { for (const fn of tabUpdated) fn(activeTab.id, change, { ...activeTab }); },
     emitActivated(tabId) { for (const fn of tabActivated) fn({ tabId }); },
     emitRemoved(tabId) { for (const fn of tabRemoved) fn(tabId); },
-    emitMedia(tabId = activeTab.id, token = clientToken) { for (const fn of runtimeListeners) fn({ type: 'swiftget-popup-media-changed', tabId, clientToken: token }, { id: 'synthetic-extension' }); },
+    emitMedia(tabId = activeTab.id, token = clientToken, version = selectionVersion) { for (const fn of runtimeListeners) fn({ type: 'swiftget-popup-media-changed', tabId, clientToken: token, selectionVersion: version }, { id: 'synthetic-extension' }); },
     setDeferMedia(value) { deferMedia = value; },
     resolveMedia(index) { pendingMedia[index]?.(); },
     pendingMedia() { return pendingMedia.length; },
@@ -79,6 +79,7 @@ async function page(name, { store = {}, items = [], online = true, preparedPort 
   await buttons[0].fire("click");
   const download = p.messages.find((m) => m.type === "swiftget-download");
   assert(download); assert.strictEqual(download.item.url, "https://media.test/video"); assert.strictEqual(download.referrer, "https://example.test/watch");
+  assert.strictEqual(download.selectionVersion, 0);
   assert.strictEqual(download.fileName, "Calm_ _Coast__.mp4"); assert.strictEqual(buttons[0].dataset.sent, "true"); assert(buttons[0].disabled);
   const count = p.messages.length; await buttons[0].fire("click"); assert.strictEqual(p.messages.length, count, "sent actions do not submit twice");
   p.ids.enabled.checked = false; await p.ids.enabled.fire("change"); assert.strictEqual(p.store.enabled, false); assert(p.ids.scale.disabled); assert(buttons.every((b) => b.disabled));
@@ -121,6 +122,20 @@ async function page(name, { store = {}, items = [], online = true, preparedPort 
   assert(!p.messages.some((m) => m.type === "swiftget-download"), "same-page source changes immediately invalidate old popup actions");
   await turn(); await turn();
   assert(p.document.querySelectorAll("[data-download]")[0].attributes['aria-label'].includes('Replacement source'));
+
+  p = await page("popup", { items: [{ label: "Embedded A", frameId: 1, frameToken: "frame-a", url: "https://media.test/a" }] });
+  const frameAButton = p.document.querySelectorAll("[data-download]")[0];
+  p.setMedia([{ label: "Embedded B", frameId: 2, frameToken: "frame-b", url: "https://media.test/b" }], "token-a", 1);
+  p.emitMedia();
+  await frameAButton.fire("click");
+  assert(!p.messages.some(m => m.type === "swiftget-download"), 'changing the active embedded frame immediately invalidates old actions');
+  await turn(); await turn();
+  const frameBButton = p.document.querySelectorAll("[data-download]")[0];
+  assert(frameBButton.attributes['aria-label'].includes('Embedded B'));
+  await frameBButton.fire("click");
+  const frameBDownload = p.messages.find(m => m.type === "swiftget-download");
+  assert.strictEqual(frameBDownload.selectionVersion, 1);
+  assert.strictEqual(frameBDownload.item.frameId, 2);
 
   p = await page("popup", { items: [{ label: "Old", url: "https://media.test/old", ext: "mp4" }] });
   p.setDeferMedia(true); p.emitMedia(); await turn();

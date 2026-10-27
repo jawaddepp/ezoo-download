@@ -23,7 +23,8 @@ function pageIdentity(href) {
 
 function currentSnapshot(snapshot) {
   return !!snapshot && !!activeSnapshot && snapshot.tabId === activeSnapshot.tabId &&
-    snapshot.page === activeSnapshot.page && snapshot.clientToken === activeSnapshot.clientToken;
+    snapshot.page === activeSnapshot.page && snapshot.clientToken === activeSnapshot.clientToken &&
+    snapshot.selectionVersion === activeSnapshot.selectionVersion;
 }
 
 function showEmptyMedia(message = "Start playing a video to see available formats.") {
@@ -47,7 +48,7 @@ function invalidateMedia() {
 
 function queueMediaRefresh({ invalidate = false } = {}) {
   if (invalidate) invalidateMedia();
-  if (!invalidate && activeSnapshot && [...pendingActions].some((key) => key.startsWith(`${activeSnapshot.clientToken}:`))) {
+  if (!invalidate && activeSnapshot && [...pendingActions].some((key) => key.startsWith(`${activeSnapshot.clientToken}:${activeSnapshot.selectionVersion}:`))) {
     refreshDeferred = true;
     return;
   }
@@ -175,10 +176,10 @@ function mediaRow({ label, detail, kind, unavailable, message, playlist, snapsho
   button.type = "button";
   button.className = "download-button";
   button.dataset.download = "true";
-  button.dataset.unavailable = String(!!unavailable || !snapshot.clientToken);
+  button.dataset.unavailable = String(!!unavailable || !snapshot.clientToken || snapshot.selectionVersion === null);
   const actionLabel = playlist ? "Download All" : "Download";
   const item = message.item || {};
-  const actionKey = `${snapshot.clientToken}:${playlist ? "playlist" : `${item.yt?.source || ""}|${item.yt?.key || ""}|${item.url || ""}|${label}`}`;
+  const actionKey = `${snapshot.clientToken}:${snapshot.selectionVersion}:${playlist ? "playlist" : `${item.yt?.source || ""}|${item.yt?.key || ""}|${item.url || ""}|${label}`}`;
   if (sentActions.has(actionKey)) button.dataset.sent = "true";
   button.setAttribute("aria-label", `${actionLabel}: ${label}`);
   const buttonLabel = document.createElement("span");
@@ -200,7 +201,7 @@ function mediaRow({ label, detail, kind, unavailable, message, playlist, snapsho
       return;
     }
     // The worker validates the captured token and tab again at dispatch.
-    const result = await request({ ...message, tabId: snapshot.tabId, clientToken: snapshot.clientToken });
+    const result = await request({ ...message, tabId: snapshot.tabId, clientToken: snapshot.clientToken, selectionVersion: snapshot.selectionVersion });
     pendingActions.delete(actionKey);
     if (!currentSnapshot(snapshot)) { if (refreshDeferred) { refreshDeferred = false; queueMediaRefresh(); } return; }
     button.dataset.pending = "false";
@@ -246,8 +247,9 @@ async function loadMedia() {
   if (revision !== mediaRevision) return;
   if (!current || current.id !== tab.id || pageIdentity(current.url) !== page) { queueMediaRefresh({ invalidate: true }); return; }
   const token = typeof response?.clientToken === "string" && response.clientToken ? response.clientToken : null;
-  const items = token && Array.isArray(response?.items) && response.tabId === tab.id ? response.items : [];
-  const snapshot = { tabId: tab.id, page, clientToken: token };
+  const selectionVersion = Number.isSafeInteger(response?.selectionVersion) && response.selectionVersion >= 0 ? response.selectionVersion : null;
+  const items = token && selectionVersion !== null && Array.isArray(response?.items) && response.tabId === tab.id ? response.items : [];
+  const snapshot = { tabId: tab.id, page, clientToken: token, selectionVersion };
   if (!currentSnapshot(snapshot)) sentActions.clear();
   activeSnapshot = snapshot;
   if (!items.length) { showEmptyMedia(); updateDownloadControls(); return; }
@@ -289,7 +291,7 @@ async function init() {
   });
   chrome.runtime.onMessage?.addListener((message, sender) => {
     if (sender?.id !== chrome.runtime.id || sender.tab || message.type !== "swiftget-popup-media-changed" || message.tabId !== activeTabId) return;
-    const changedVideo = !!activeSnapshot && message.clientToken !== activeSnapshot.clientToken;
+    const changedVideo = !!activeSnapshot && (message.clientToken !== activeSnapshot.clientToken || message.selectionVersion !== activeSnapshot.selectionVersion);
     queueMediaRefresh({ invalidate: changedVideo });
   });
   document.getElementById("settings").addEventListener("click", () => {

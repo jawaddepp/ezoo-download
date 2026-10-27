@@ -143,14 +143,24 @@
   }
 
   let lastPage = "";
-  function watchVideos(playedVideo = null) {
+  let observedInitialPlayer = false;
+  function watchVideos(playedVideo = null, playedAt = 0, observePlayback = false) {
     syncPage();
     const v = biggestVideo();
     if (!v) return;
+    const initialObservation = !observedInitialPlayer;
+    observedInitialPlayer = true;
     // A page may contain multiple already-loaded embedded players. Announce
     // the one the user actually starts, even if its URL has not changed.
     // Tiny short loops are not user-selected video playback.
-    if (!TOP && playedVideo === v && !v.paused && !v.ended && (v.duration > 3 || !Number.isFinite(v.duration))) lastPage = "";
+    const activeSelection = playedVideo === v && !v.paused && !v.ended && (v.duration > 3 || !Number.isFinite(v.duration));
+    // A player can already be running when this script is injected or the
+    // worker restarts. Report this once, separately from an actual play event.
+    // Short loops are ignored; the worker keeps explicit playback choices
+    // ahead of these observations, including for muted autoplay.
+    const observedPlaying = !TOP && (initialObservation || observePlayback) &&
+      !v.paused && !v.ended && (v.duration > 3 || !Number.isFinite(v.duration));
+    if (activeSelection) lastPage = "";
     const bubble = bubbles.get(v);
     const token = clientToken;
     if (bubble && syncVideo(bubble)) renderOne(bubble);
@@ -165,10 +175,10 @@
       if (token === clientToken) advanceMainPlayer();
       renderOne(bubble);
     }
-    if (page !== lastPage || (!TOP && !lastPage)) {
+    if (activeSelection || observePlayback || page !== lastPage || (!TOP && !lastPage)) {
       if (!TOP && lastPage === "frame:" + page) return;
       lastPage = TOP ? page : "frame:" + page;
-      chrome.runtime.sendMessage({ type: "swiftget-video-seen", page, frame: !TOP, ...(TOP ? { clientToken } : { frameToken: clientToken }) }).catch?.(() => {});
+      chrome.runtime.sendMessage({ type: "swiftget-video-seen", page, frame: !TOP, ...(TOP ? { clientToken } : { frameToken: clientToken }), ...(activeSelection ? { activeSelection: true, selectedAt: playedAt } : observedPlaying ? { observedPlaying: true } : {}) }).catch?.(() => {});
     }
   }
 
@@ -1206,7 +1216,7 @@
       return false;
     }
     if (msg.type === "swiftget-refresh-current-player") {
-      if (TOP && fromBackground) { lastPage = ""; watchVideos(); }
+      if (fromBackground) { lastPage = ""; watchVideos(null, 0, true); }
       return false;
     }
     if (msg.type === "swiftget-read-top-fullscreen") {
@@ -1296,7 +1306,8 @@
   document.addEventListener("play", (event) => {
     const path = event.composedPath?.() || [event.target];
     const playedVideo = path.find((node) => node?.tagName === "VIDEO") || null;
-    setTimeout(() => (watchVideos(playedVideo), place()), 300);
+    const playedAt = Date.now();
+    setTimeout(() => (watchVideos(playedVideo, playedAt), place()), 300);
   }, true);
   addEventListener("popstate", () => { syncPage(); setTimeout(watchVideos, 500); });
   document.addEventListener("yt-navigate-finish", () => { syncPage(); watchVideos(); place(); });

@@ -443,6 +443,42 @@ const tabPages = new Map();
 const tabClientTokens = new Map();
 const tabHandshakes = new Map();
 const freshMedia = new Map();
+const tabSelections = new Map();
+const selectionVersions = new Map();
+const topSelections = new Set();
+const selectionTimes = new Map();
+function selectionVersionOf(tabId) { return selectionVersions.get(tabId) || 0; }
+function clearSelection(tabId) {
+  tabSelections.delete(tabId);
+  topSelections.delete(tabId);
+  selectionTimes.delete(tabId);
+  selectionVersions.set(tabId, selectionVersionOf(tabId) + 1);
+}
+function selectFrame(tabId, frameId, frameToken, page, selectedAt, activeSelection, observedPlaying) {
+  const previous = tabSelections.get(tabId);
+  const identity = pageIdentity(page);
+  const latest = selectionTimes.get(tabId) || 0;
+  if (activeSelection && selectedAt && selectedAt < latest) return null;
+  if (previous && previous.frameId === frameId && previous.frameToken === frameToken && previous.page === identity) {
+    if (activeSelection && selectedAt) { selectionTimes.set(tabId, selectedAt); previous.selectedAt = selectedAt; }
+    if (activeSelection) previous.explicit = true;
+    return previous;
+  }
+  // A preloaded, paused frame must not displace a different actively chosen
+  // player. A real play event can select it; stale older play events cannot.
+  if (topSelections.has(tabId) && !activeSelection) return null;
+  if (previous && previous.frameId !== frameId && !activeSelection && !(observedPlaying && !previous.explicit && !previous.observedPlaying)) return null;
+  if (activeSelection) { topSelections.delete(tabId); if (selectedAt) selectionTimes.set(tabId, selectedAt); }
+  const selection = { frameId, frameToken, page: identity, selectedAt: selectedAt || previous?.selectedAt || 0, explicit: !!activeSelection, observedPlaying: !!observedPlaying, version: selectionVersionOf(tabId) + 1 };
+  selectionVersions.set(tabId, selection.version);
+  tabSelections.set(tabId, selection);
+  notifyPopup(tabId);
+  return selection;
+}
+function selectedFrameIsCurrent(tabId, frame) {
+  const selected = tabSelections.get(tabId);
+  return !!selected && selected.version === frame.selectionVersion && selected.frameId === frame.frameId && selected.frameToken === frame.frameToken;
+}
 function epochOf(tabId) { return tabEpochs.get(tabId) || 0; }
 function advanceTab(tabId) { const next = epochOf(tabId) + 1; tabEpochs.set(tabId, next); return next; }
 function writeTab(tabId, operation) {
@@ -470,7 +506,7 @@ async function currentFrame(tabId, frameId, token) {
   } catch (_) { return false; }
 }
 function notifyPopup(tabId) {
-  try { chrome.runtime.sendMessage?.({ type: "swiftget-popup-media-changed", tabId, clientToken: tabClientTokens.get(tabId) || null })?.catch?.(() => {}); } catch (_) {}
+  try { chrome.runtime.sendMessage?.({ type: "swiftget-popup-media-changed", tabId, clientToken: tabClientTokens.get(tabId) || null, selectionVersion: selectionVersionOf(tabId) })?.catch?.(() => {}); } catch (_) {}
 }
 async function waitTabWrites(tabId) {
   // A newer clear may have been queued while an earlier write was pending.
@@ -499,23 +535,27 @@ function optionItems(resolved, source) {
 /** Everything the page button and the popup show, in one list. */
 async function itemsForTab(tabId) {
   const epoch = epochOf(tabId), token = tabClientTokens.get(tabId);
+  const selectionVersion = selectionVersionOf(tabId), selection = tabSelections.get(tabId);
   await waitTabWrites(tabId);
-  if (!currentWork(tabId, epoch, token)) return [];
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return [];
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab?.url || !currentWork(tabId, epoch, token)) return [];
+  if (!tab?.url || !currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return [];
   if (isNetflixWatch(tab && tab.url)) return [protectedVideoItem()];
   const { media: storedMedia, mediaOwner, yt: storedYt, res: storedRes } = await readTab(tabId);
-  if (!currentWork(tabId, epoch, token)) return [];
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return [];
   // Never present resolved formats for an earlier YouTube video, even while
   // navigation cleanup is still in flight.
   const id = tab && isYoutube(tab.url) ? videoIdOf(tab.url) : null;
-  const yt = storedYt && (!tab?.url || (id && storedYt.videoId === id)) ? storedYt : null;
+  const yt = !selection && storedYt && (!tab?.url || (id && storedYt.videoId === id)) ? storedYt : null;
   let res = storedRes && (!tab?.url || pageIdentity(storedRes.ownerPage || storedRes.page) === pageIdentity(tab.url)) ? storedRes : null;
+  if (selection && (!res || res.frameId !== selection.frameId || res.frameToken !== selection.frameToken || res.selectionVersion !== selection.version)) res = null;
   // A cached embed is usable only while the same frame generation remains.
   if (res?.frameToken && !await currentFrame(tabId, res.frameId, res.frameToken)) res = null;
-  if (!currentWork(tabId, epoch, token)) return [];
-  const media = !tab?.url || mediaOwner === pageIdentity(tab.url) ? storedMedia : [];
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return [];
+  const ownedMedia = !tab?.url || mediaOwner === pageIdentity(tab.url) ? storedMedia : [];
+  const media = selection ? ownedMedia.filter((item) => item.sourceFrameId === selection.frameId) : ownedMedia;
   const items = [];
+  if (selection && !res) items.push({ label: "Getting video qualities…", sub: "This takes a few seconds", disabled: true });
   if (res && !yt) {
     if (res.resolved && res.resolved.options.length) {
       const options = optionItems(res.resolved, res.page);
@@ -558,6 +598,7 @@ async function itemsForTab(tabId) {
       sub: m.url,
       url: m.url,
       ext: m.ext,
+      ...(selection ? { frameId: selection.frameId, frameToken: selection.frameToken } : {}),
     });
   }
   return items;
@@ -565,8 +606,9 @@ async function itemsForTab(tabId) {
 
 async function pushToTab(tabId) {
   const epoch = epochOf(tabId), token = tabClientTokens.get(tabId);
+  const selectionVersion = selectionVersionOf(tabId);
   const { enabled } = await getOpts();
-  if (!currentWork(tabId, epoch, token)) return;
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return;
   if (!enabled) {
     // switched off: no buttons on the page, "off" on the add-in's icon
     chrome.action.setBadgeBackgroundColor({ color: "#8a94a3" });
@@ -576,7 +618,7 @@ async function pushToTab(tabId) {
     return;
   }
   const items = await itemsForTab(tabId);
-  if (!currentWork(tabId, epoch, token)) return;
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return;
   const count = items.filter((i) => !i.disabled).length;
   chrome.action.setBadgeBackgroundColor({ color: "#1f6feb" });
   chrome.action.setBadgeText({ tabId, text: count ? String(count) : "" }).catch(() => {});
@@ -642,7 +684,7 @@ async function addMedia(tabId, item, documentUrl = "", frameId = 0) {
     const saved = await chrome.storage.session.get([key, ownerKey]);
     const current = saved[ownerKey] === owner ? saved[key] || [] : [];
     if (!currentWork(tabId, epoch, token) || current.some((m) => m.url === item.url)) return false;
-    current.push(item);
+    current.push({ ...item, sourceFrameId: frameId });
     while (current.length > 15) current.shift();
     await chrome.storage.session.set({ [key]: current, [ownerKey]: owner });
     return currentWork(tabId, epoch, token);
@@ -844,10 +886,11 @@ async function resolveYoutube(tabId, pageUrl) {
  */
 async function resolvePage(tabId, page, embedded = false, frame = null) {
   const epoch = epochOf(tabId), token = tabClientTokens.get(tabId);
+  const active = () => currentWork(tabId, epoch, token) && (!frame || selectedFrameIsCurrent(tabId, frame));
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!currentWork(tabId, epoch, token) || !tab) return;
+  if (!active() || !tab) return;
   if (frame && !await currentFrame(tabId, frame.frameId, frame.frameToken)) return;
-  if (!currentWork(tabId, epoch, token)) return;
+  if (!active()) return;
   if (isProtectedPlayback(page, tab && tab.url)) {
     pushToTab(tabId);
     return;
@@ -857,15 +900,15 @@ async function resolvePage(tabId, page, embedded = false, frame = null) {
   if (!page || !/^https?:/i.test(page) || (isYoutube(page) && !embedded)) return;
   if (!tabPages.has(tabId)) tabPages.set(tabId, pageIdentity(tab.url));
   const key = `res_${tabId}`;
-  const resolution = `${epoch}:${page}:${frame?.frameId || 0}:${frame?.frameToken || ""}`;
+  const resolution = `${epoch}:${page}:${frame?.frameId || 0}:${frame?.frameToken || ""}:${frame?.selectionVersion || 0}`;
   if (resolving.get(tabId) === resolution) return;
   const started = await writeTab(tabId, async () => {
-    if (!currentWork(tabId, epoch, token)) return false;
+    if (!active()) return false;
     const state = (await chrome.storage.session.get(key))[key];
-    if (!currentWork(tabId, epoch, token)) return false;
-    if (state && state.page === page && pageIdentity(state.ownerPage || state.page) === pageIdentity(tab.url) && (!frame || (state.frameId === frame.frameId && state.frameToken === frame.frameToken)) && (state.resolved || state.resolving || state.resolveError)) return false;
+    if (!active()) return false;
+    if (state && state.page === page && pageIdentity(state.ownerPage || state.page) === pageIdentity(tab.url) && (!frame || (state.frameId === frame.frameId && state.frameToken === frame.frameToken && state.selectionVersion === frame.selectionVersion)) && (state.resolved || state.resolving || state.resolveError)) return false;
     await chrome.storage.session.set({ [key]: { page, ownerPage: tab.url, ...(frame || {}), resolving: true } });
-    return currentWork(tabId, epoch, token);
+    return active();
   });
   if (!started) return;
   resolving.set(tabId, resolution);
@@ -880,11 +923,11 @@ async function resolvePage(tabId, page, embedded = false, frame = null) {
   }
   if (frame && !await currentFrame(tabId, frame.frameId, frame.frameToken)) return;
   const changed = await writeTab(tabId, async () => {
-    if (!currentWork(tabId, epoch, token)) return false;
+    if (!active()) return false;
     const now = (await chrome.storage.session.get(key))[key];
-    if (!currentWork(tabId, epoch, token) || !now || now.page !== page || pageIdentity(now.ownerPage || now.page) !== pageIdentity(tab.url) || (frame && (now.frameId !== frame.frameId || now.frameToken !== frame.frameToken))) return false;
+    if (!active() || !now || now.page !== page || pageIdentity(now.ownerPage || now.page) !== pageIdentity(tab.url) || (frame && (now.frameId !== frame.frameId || now.frameToken !== frame.frameToken || now.selectionVersion !== frame.selectionVersion))) return false;
     await chrome.storage.session.set({ [key]: { page, ownerPage: tab.url, ...(frame || {}), resolving: false, ...change } });
-    return currentWork(tabId, epoch, token);
+    return active();
   });
   if (changed) pushToTab(tabId);
 }
@@ -953,6 +996,7 @@ async function resetForClientSerial(tabId, token) {
   const preserve = fresh && fresh.epoch === epochOf(tabId) && fresh.owner === pageIdentity(tabBefore.url) ? fresh : null;
   tabClientTokens.set(tabId, token);
   const epoch = advanceTab(tabId);
+  clearSelection(tabId);
   seenStreams.delete(tabId);
   resolving.delete(tabId);
   await clearTab(tabId, epoch, preserve);
@@ -963,7 +1007,7 @@ async function resetForClientSerial(tabId, token) {
   tabPages.set(tabId, pageIdentity(tab.url));
   if (preserve) pushToTab(tabId);
   if (videoIdOf(tab.url) && isYoutube(tab.url)) resolveYoutube(tabId, tab.url);
-  else chrome.tabs.sendMessage(tabId, { type: "swiftget-refresh-current-player" }, { frameId: 0 }).catch(() => {});
+  chrome.tabs.sendMessage(tabId, { type: "swiftget-refresh-current-player" }).catch(() => {});
 }
 
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
@@ -975,6 +1019,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   // Advance before any await, including for A→B→A: an old A resolver must
   // never be accepted as the new visit just because its video ID matches.
   const epoch = advanceTab(tabId);
+  clearSelection(tabId);
   freshMedia.delete(tabId);
   const newId = videoIdOf(info.url);
   seenStreams.delete(tabId);
@@ -984,11 +1029,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   else if (validClientToken(tabClientTokens.get(tabId))) {
     // The page script may have announced its player before Chrome published
     // the new SPA URL. Ask it once to announce the current player again.
-    chrome.tabs.sendMessage(tabId, { type: "swiftget-refresh-current-player" }, { frameId: 0 }).catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: "swiftget-refresh-current-player" }).catch(() => {});
   }
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   const epoch = advanceTab(tabId);
+  clearSelection(tabId);
   freshMedia.delete(tabId);
   seenStreams.delete(tabId);
   resolving.delete(tabId);
@@ -1107,41 +1153,43 @@ function isPopupSender(sender) {
 // and the specific player generation whose rows it displayed.
 async function validatePopupAction(msg, sender, expectedPage) {
   if (sender.tab || (msg.tabId == null && !isPopupSender(sender))) return null;
-  if (sender.id !== chrome.runtime.id || !Number.isInteger(msg.tabId) || !validClientToken(msg.clientToken)) {
+  if (sender.id !== chrome.runtime.id || !Number.isInteger(msg.tabId) || !validClientToken(msg.clientToken) || !Number.isSafeInteger(msg.selectionVersion)) {
     throw new Error("The video changed. Please choose its format again.");
   }
   const epoch = epochOf(msg.tabId), token = tabClientTokens.get(msg.tabId);
-  if (token !== msg.clientToken) throw new Error("The video changed. Please choose its format again.");
+  const selectionVersion = selectionVersionOf(msg.tabId);
+  if (token !== msg.clientToken || selectionVersion !== msg.selectionVersion) throw new Error("The video changed. Please choose its format again.");
   const [tab, top] = await Promise.all([
     chrome.tabs.get(msg.tabId).catch(() => null),
     chrome.tabs.sendMessage(msg.tabId, { type: "swiftget-request-client-token" }, { frameId: 0 }).catch(() => null),
   ]);
-  if (!currentWork(msg.tabId, epoch, token) || top?.clientToken !== msg.clientToken || !tab?.url || !expectedPage || pageIdentity(tab.url) !== pageIdentity(expectedPage)) {
+  if (!currentWork(msg.tabId, epoch, token) || selectionVersionOf(msg.tabId) !== selectionVersion || top?.clientToken !== msg.clientToken || !tab?.url || !expectedPage || pageIdentity(tab.url) !== pageIdentity(expectedPage)) {
     throw new Error("The video changed. Please choose its format again.");
   }
   return tab;
 }
 
 async function popupSnapshot(tabId) {
-  const empty = { items: [], clientToken: null, tabId };
-  if (!Number.isInteger(tabId)) return empty;
+  const empty = () => ({ items: [], clientToken: null, tabId, selectionVersion: selectionVersionOf(tabId) });
+  if (!Number.isInteger(tabId)) return empty();
   let tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab?.url) return empty;
+  if (!tab?.url) return empty();
   // A service worker may have restarted while the page remained open. Ask
   // the trusted top content script for its opaque generation token.
   if (!validClientToken(tabClientTokens.get(tabId))) {
     const beforeEpoch = epochOf(tabId), beforeToken = tabClientTokens.get(tabId);
     let response;
     try { response = await chrome.tabs.sendMessage(tabId, { type: "swiftget-request-client-token" }, { frameId: 0 }); } catch (_) {}
-    if (!currentWork(tabId, beforeEpoch, beforeToken) || !validClientToken(response?.clientToken)) return empty;
+    if (!currentWork(tabId, beforeEpoch, beforeToken) || !validClientToken(response?.clientToken)) return empty();
     await resetForClient(tabId, response.clientToken);
     tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab?.url) return empty;
+    if (!tab?.url) return empty();
   }
   const epoch = epochOf(tabId), token = tabClientTokens.get(tabId);
+  const selectionVersion = selectionVersionOf(tabId);
   const items = await itemsForTab(tabId);
-  if (!currentWork(tabId, epoch, token)) return empty;
-  return { items, clientToken: token, tabId };
+  if (!currentWork(tabId, epoch, token) || selectionVersionOf(tabId) !== selectionVersion) return empty();
+  return { items, clientToken: token, tabId, selectionVersion };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1189,6 +1237,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             throw new Error("The video changed. Please choose its format again.");
           }
         }
+        if (popupTab && selectionVersionOf(frameTab) !== msg.selectionVersion) {
+          throw new Error("The video changed. Please choose its format again.");
+        }
         // a video inside a frame (embedded player): that frame's page
         const referrer = sender.frameId && msg.referrer ? msg.referrer : sender.tab ? sender.tab.url : msg.referrer;
         if (item.yt) return downloadVideo(item.yt, msg.title, referrer);
@@ -1197,9 +1248,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
     case "swiftget-get-media":
       if (msg.snapshot && (sender.tab || sender.id !== chrome.runtime.id)) {
-        sendResponse({ items: [], clientToken: null, tabId: msg.tabId }); return false;
+        sendResponse({ items: [], clientToken: null, tabId: msg.tabId, selectionVersion: 0 }); return false;
       }
-      (msg.snapshot ? popupSnapshot(msg.tabId) : itemsForTab(msg.tabId)).then(sendResponse).catch(() => sendResponse(msg.snapshot ? { items: [], clientToken: null, tabId: msg.tabId } : []));
+      (msg.snapshot ? popupSnapshot(msg.tabId) : itemsForTab(msg.tabId)).then(sendResponse).catch(() => sendResponse(msg.snapshot ? { items: [], clientToken: null, tabId: msg.tabId, selectionVersion: 0 } : []));
       return true;
     case "swiftget-media-request":
       if (!sender.tab) return false;
@@ -1227,6 +1278,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const senderPage = pageIdentity(sender.tab.url);
       const frame = msg.frameToken ? { frameId: sender.frameId, frameToken: msg.frameToken } : null;
       if (frame && (sender.id !== chrome.runtime.id || !Number.isInteger(frame.frameId) || frame.frameId <= 0 || !validClientToken(frame.frameToken))) return false;
+      const selectedAt = Number.isFinite(msg.selectedAt) && msg.selectedAt > 0 ? msg.selectedAt : 0;
+      if (frame) {
+        // Invalidate the old popup selection synchronously, before the new
+        // frame's token challenge or resolver can finish.
+        const selection = selectFrame(sender.tab.id, frame.frameId, frame.frameToken, msg.page || "", selectedAt, !!msg.activeSelection, !!msg.observedPlaying);
+        if (!selection) return false;
+        frame.selectionVersion = selection.version;
+      } else if (sender.frameId === 0 && sender.id === chrome.runtime.id && msg.activeSelection && validClientToken(msg.clientToken) && tabClientTokens.get(sender.tab.id) === msg.clientToken) {
+        const last = selectionTimes.get(sender.tab.id) || 0;
+        if (!selectedAt || selectedAt >= last) {
+          if (tabSelections.has(sender.tab.id)) {
+            clearSelection(sender.tab.id);
+            notifyPopup(sender.tab.id);
+          }
+          topSelections.add(sender.tab.id);
+          if (selectedAt) selectionTimes.set(sender.tab.id, selectedAt);
+        }
+      }
       getOpts().then(async (o) => {
         if (!o.enabled) return;
         if (sender.frameId === 0 && sender.id === chrome.runtime.id && validClientToken(msg.clientToken)) {
@@ -1237,9 +1306,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const tab = await chrome.tabs.get(sender.tab.id).catch(() => null);
         if (!currentWork(sender.tab.id, epoch, token) || !tab || pageIdentity(tab.url) !== senderPage) return;
         if (frame && !await currentFrame(tab.id, frame.frameId, frame.frameToken)) return;
-        if (!currentWork(sender.tab.id, epoch, token)) return;
-        if (isYoutube(tab.url)) resolveYoutube(tab.id, tab.url);
-        else resolvePage(tab.id, msg.page || tab.url, !!msg.frame, frame);
+        if (!currentWork(sender.tab.id, epoch, token) || (frame && !selectedFrameIsCurrent(tab.id, frame))) return;
+        if (frame) resolvePage(tab.id, msg.page || tab.url, true, frame);
+        else if (isYoutube(tab.url)) resolveYoutube(tab.id, tab.url);
+        else resolvePage(tab.id, msg.page || tab.url, !!msg.frame);
       });
       }
       return false;
