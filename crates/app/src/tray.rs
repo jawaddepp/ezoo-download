@@ -1,5 +1,4 @@
-//! Icon next to the clock (Windows): the app keeps running there when its
-//! window is closed, like other download managers.
+//! Native Windows tray and macOS menu bar access while the main window is closed.
 
 #[cfg_attr(not(windows), allow(dead_code))]
 pub enum TrayAction {
@@ -256,10 +255,178 @@ mod imp {
                 self.limiter.set_checked(on);
             }
         }
+
+        pub fn is_available(&self) -> bool {
+            true
+        }
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod imp {
+    use super::{DownloadAction, TrayAction};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use objc2::{define_class, msg_send, rc::Retained, runtime::{AnyObject, Sel}, sel, MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{NSAccessibility, NSImage, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSSquareStatusItemLength};
+    use objc2_foundation::{NSObject, NSObjectProtocol, NSSize, NSString};
+
+    type ActionHandler = Rc<dyn Fn(TrayAction)>;
+    thread_local! {
+        static HANDLER: RefCell<Option<ActionHandler>> = RefCell::new(None);
+        static PENDING: RefCell<Vec<TrayAction>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn dispatch(action: TrayAction) {
+        // Defer Slint changes until AppKit has finished tracking the menu. No
+        // polling or shared native menu event handler is needed for these actions.
+        let _ = slint::invoke_from_event_loop(move || {
+            let handler = HANDLER.with(|h| h.borrow().clone());
+            if let Some(handler) = handler {
+                handler(action);
+            } else {
+                PENDING.with(|p| p.borrow_mut().push(action));
+            }
+        });
+    }
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements. This target has no
+        // custom deallocation and is only created/accessed on the main thread.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[name = "MacDownloaderStatusTarget"]
+        #[ivars = ()]
+        struct StatusTarget;
+
+        unsafe impl NSObjectProtocol for StatusTarget {}
+
+        impl StatusTarget {
+            #[unsafe(method(showDownloads:))]
+            fn show_downloads(&self, _sender: Option<&AnyObject>) { dispatch(TrayAction::Show); }
+            #[unsafe(method(newDownload:))]
+            fn new_download(&self, _sender: Option<&AnyObject>) { dispatch(TrayAction::AddUrl); }
+            #[unsafe(method(showSettings:))]
+            fn show_settings(&self, _sender: Option<&AnyObject>) { dispatch(TrayAction::Options); }
+            #[unsafe(method(quitDownloader:))]
+            fn quit_downloader(&self, _sender: Option<&AnyObject>) { dispatch(TrayAction::Exit); }
+        }
+    );
+
+    struct NativeTray {
+        status: Retained<NSStatusItem>,
+        _menu: Retained<NSMenu>,
+        // NSMenuItem targets are not retained by AppKit.
+        _target: Retained<StatusTarget>,
+    }
+
+    impl NativeTray {
+        fn new() -> Option<Self> {
+            let mtm = MainThreadMarker::new()?;
+            let label = NSString::from_str("Mac Downloader");
+            let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str("arrow.down.to.line"), Some(&label),
+            )?;
+            image.setTemplate(true);
+            image.setSize(NSSize::new(18.0, 18.0));
+            let target: Retained<StatusTarget> = {
+                let allocated = StatusTarget::alloc(mtm).set_ivars(());
+                // SAFETY: NSObject's init returns an initialized instance.
+                unsafe { msg_send![super(allocated), init] }
+            };
+            let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &label);
+            menu.setAutoenablesItems(false);
+            let add_item = |title: &str, selector: Sel| {
+                // SAFETY: Each selector is implemented on StatusTarget with the
+                // standard one-sender action signature; target outlives the menu.
+                let item = unsafe {
+                    let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                        NSMenuItem::alloc(mtm), &NSString::from_str(&crate::t(title)),
+                        Some(selector), &NSString::from_str(""),
+                    );
+                    item.setTarget(Some(&target));
+                    item
+                };
+                menu.addItem(&item);
+            };
+            add_item("Show Mac Downloader", sel!(showDownloads:));
+            add_item("New Download…", sel!(newDownload:));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            add_item("Settings…", sel!(showSettings:));
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            add_item("Quit Mac Downloader", sel!(quitDownloader:));
+
+            let status = NSStatusBar::systemStatusBar().statusItemWithLength(NSSquareStatusItemLength);
+            let Some(button) = status.button(mtm) else {
+                NSStatusBar::systemStatusBar().removeStatusItem(&status);
+                return None;
+            };
+            button.setImage(Some(&image));
+            button.setToolTip(Some(&label));
+            button.setAccessibilityLabel(Some(&label));
+            status.setMenu(Some(&menu));
+            Some(Self { status, _menu: menu, _target: target })
+        }
+    }
+
+    impl Drop for NativeTray {
+        fn drop(&mut self) {
+            NSStatusBar::systemStatusBar().removeStatusItem(&self.status);
+        }
+    }
+
+    pub struct Tray {
+        native: RefCell<Option<NativeTray>>,
+        initialized: Cell<bool>,
+    }
+
+    impl Drop for Tray {
+        fn drop(&mut self) {
+            HANDLER.with(|h| h.borrow_mut().take());
+            PENDING.with(|p| p.borrow_mut().clear());
+        }
+    }
+
+    impl Tray {
+        pub fn new() -> Option<Self> {
+            // Create AppKit status items only after Slint's main event loop has
+            // started. The first existing refresh tick performs initialization.
+            MainThreadMarker::new()?;
+            Some(Self { native: RefCell::new(None), initialized: Cell::new(false) })
+        }
+
+        pub fn set_action_handler(&self, handler: ActionHandler) {
+            HANDLER.with(|h| *h.borrow_mut() = Some(handler));
+        }
+
+        pub fn is_available(&self) -> bool {
+            self.native.borrow().is_some()
+        }
+
+        pub fn poll(&self) -> Vec<TrayAction> {
+            if !self.initialized.replace(true) {
+                *self.native.borrow_mut() = NativeTray::new();
+                if !self.is_available() {
+                    // Never leave a startup instance inaccessible if the status
+                    // item couldn't be created. The close policy can then quit.
+                    return vec![TrayAction::Show];
+                }
+            }
+            PENDING.with(|p| std::mem::take(&mut *p.borrow_mut()))
+        }
+
+        pub fn set_limiter(&self, _on: bool) {}
+    }
+
+    // A single menu bar item keeps background operation discoverable without
+    // creating one menu bar icon per download.
+    pub fn show_download(_id: u64, _tip: &str, _progress: Option<f32>, _labels: (&str, &str)) -> bool { false }
+    pub fn update_download(_id: u64, _tip: &str, _progress: Option<f32>) {}
+    pub fn remove_download(_id: u64) {}
+    pub fn take_download_actions() -> Vec<(u64, DownloadAction)> { Vec::new() }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::{DownloadAction, TrayAction};
     pub fn show_download(_id: u64, _tip: &str, _progress: Option<f32>, _labels: (&str, &str)) -> bool {
@@ -279,6 +446,7 @@ mod imp {
             Vec::new()
         }
         pub fn set_limiter(&self, _on: bool) {}
+        pub fn is_available(&self) -> bool { false }
     }
 }
 

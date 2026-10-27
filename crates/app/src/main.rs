@@ -323,7 +323,7 @@ fn install_crash_log() {
 
 fn main() -> anyhow::Result<()> {
     install_crash_log();
-    // started by Windows at sign-in: stay next to the clock, no window
+    // Login launches stay in the menu bar / notification area without opening a window.
     let background = std::env::args().any(|a| a == "--background");
     let data_dir = default_data_dir();
     let port = Settings::load(&data_dir.join("settings.json")).browser_port;
@@ -332,7 +332,7 @@ fn main() -> anyhow::Result<()> {
     let server = match api::bind(port) {
         Ok(s) => Some(s),
         Err(_) => {
-            if api::notify_existing(port) {
+            if if background { api::existing_running(port) } else { api::notify_existing(port) } {
                 return Ok(());
             }
             None
@@ -447,8 +447,13 @@ fn main() -> anyhow::Result<()> {
             let _ = mgr.set_settings(s);
         }
     }
-    let tray = tray::Tray::new();
+    let tray = Rc::new(tray::Tray::new());
     let has_tray = tray.is_some();
+    #[cfg(target_os = "macos")]
+    if let Some(t) = tray.as_ref().as_ref() {
+        let ui = ui.clone();
+        t.set_action_handler(Rc::new(move |action| tray_action(&ui, action)));
+    }
     {
         let s = mgr.settings();
         apply_theme(&ui, appearance::index(&s.appearance));
@@ -530,12 +535,13 @@ fn main() -> anyhow::Result<()> {
     let fast_timer = Rc::new(Timer::default());
     {
         let ui = ui.clone();
+        let tray = tray.clone();
         let weak_timer = Rc::downgrade(&fast_timer);
         fast_timer.start(TimerMode::Repeated, Duration::from_millis(100), move || {
             if let Some(timer) = weak_timer.upgrade() {
                 let visible_progress = ui.progress.borrow().values().any(|p| p.dialog.window().is_visible() && !p.dialog.window().is_minimized());
                 let exploring = ui.grabber.upgrade().is_some_and(|d| d.window().is_visible() && !d.window().is_minimized() && d.get_exploring());
-                let interval = if tray.is_some() || visible_progress || exploring {
+                let interval = if (cfg!(windows) && tray.is_some()) || visible_progress || exploring {
                     Duration::from_millis(100)
                 } else {
                     Duration::from_secs(1)
@@ -549,7 +555,7 @@ fn main() -> anyhow::Result<()> {
             }
             update_progress_windows(&ui);
             grab::poll(&ui);
-            if let Some(t) = &tray {
+            if let Some(t) = tray.as_ref().as_ref() {
                 t.set_limiter(ui.ctx.mgr.settings().speed_limit_on);
                 for action in t.poll() {
                     tray_action(&ui, action);
@@ -623,9 +629,11 @@ fn main() -> anyhow::Result<()> {
 
     {
         let mgr = mgr.clone();
+        let tray = tray.clone();
         main.window().on_close_requested(move || {
-            // with the icon next to the clock, closing only hides the window
-            if !(has_tray && mgr.settings().close_to_tray) {
+            // Only hide when the menu bar / tray really provides a way back.
+            let can_reopen = tray.as_ref().as_ref().is_some_and(|t| t.is_available());
+            if !(can_reopen && mgr.settings().close_to_tray) {
                 let _ = slint::quit_event_loop();
             }
             slint::CloseRequestResponse::HideWindow
@@ -642,7 +650,7 @@ fn main() -> anyhow::Result<()> {
             s.last_version = now.into();
             let _ = mgr.set_settings(s);
             just_updated = updated;
-            if updated {
+            if updated && !(background && has_tray) {
                 let ui = ui.clone();
                 Timer::single_shot(Duration::from_millis(1500), move || extra::whats_new(&ui));
             }
@@ -3241,7 +3249,7 @@ fn resize_progress_window(d: &DetailsDialog, expanded: bool) {
     let width = if current_width > 1.0 { current_width } else { 560.0 * scale };
     let min_width = 480.0 * scale;
     let error_height = if d.get_error().is_empty() { 0.0 } else { 56.0 };
-    let height = if expanded { 560.0 } else { 252.0 + error_height } * scale;
+    let height = if expanded { 560.0 } else { 220.0 + error_height } * scale;
     d.window().set_size(slint::LogicalSize::new(width.max(min_width), height));
 }
 

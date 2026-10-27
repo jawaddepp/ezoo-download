@@ -213,6 +213,39 @@ pub fn bind(port: u16) -> Result<Server, String> {
     Server::http(("127.0.0.1", port)).map_err(|e| e.to_string())
 }
 
+/// A sign-in launch must not reveal an already running instance. Verify its
+/// compatibility identity with a read-only request instead of posting /show.
+pub fn existing_running(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(800)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    let request = "GET /ping HTTP/1.1\r\nHost: 127.0.0.1\r\nX-SwiftGet: 1\r\nConnection: close\r\n\r\n";
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    if stream.take(8193).read_to_string(&mut response).is_err() {
+        return false;
+    }
+    is_existing_ping(&response)
+}
+
+fn is_existing_ping(response: &str) -> bool {
+    if response.len() > 8192 {
+        return false;
+    }
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else { return false };
+    let mut status = headers.lines().next().unwrap_or_default().split_whitespace();
+    if !matches!(status.next(), Some("HTTP/1.0" | "HTTP/1.1")) || status.next() != Some("200") {
+        return false;
+    }
+    #[derive(Deserialize)]
+    struct Identity { app: String }
+    serde_json::from_str::<Identity>(body).is_ok_and(|identity| identity.app == "EzooDownload")
+}
+
 /// Another SwiftGet is already running on this port: ask it to show itself.
 pub fn notify_existing(port: u16) -> bool {
     let Ok(mut s) = TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(800)) else {
@@ -427,6 +460,41 @@ fn handle(mut req: Request, config: &impl Fn() -> String, on_event: &impl Fn(Api
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_probe_is_read_only_and_requires_the_exact_app_identity() {
+        let server = Server::http(("127.0.0.1", 0)).unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let worker = std::thread::spawn(move || {
+            let request = server.recv().unwrap();
+            assert_eq!(request.method(), &Method::Get);
+            assert_eq!(request.url(), "/ping");
+            assert!(header(&request, "X-SwiftGet").is_some());
+            handle(request, &|| "{}".into(), &|_| panic!("silent probe dispatched a UI action"));
+        });
+        assert!(existing_running(address.port()));
+        worker.join().unwrap();
+
+        for valid in [
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"app\":\"EzooDownload\",\"version\":\"1.0.6\"}",
+            "HTTP/1.0 200 OK\r\n\r\n{\"app\":\"EzooDownload\"}",
+        ] {
+            assert!(is_existing_ping(valid));
+        }
+        for invalid in [
+            "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"OtherApp\"}",
+            "HTTP/1.1 404 Not Found\r\n\r\n{\"app\":\"EzooDownload\"}",
+            "HTTP/1.1 200 OK\r\n\r\nEzooDownload",
+            "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"EzooDownload\",\"app\":\"OtherApp\"}",
+            "HTTP/1.1 200 OK\r\n\r\n{\"app\":\"EzooDownload\"} trailing",
+            "HTTP/1.1 200 OK\r\n\r\n{}",
+            "200 OK\r\n\r\n{\"app\":\"EzooDownload\"}",
+        ] {
+            assert!(!is_existing_ping(invalid), "{invalid}");
+        }
+        let oversized = format!("HTTP/1.1 200 OK\r\nX-Fill: {}\r\n\r\n{{\"app\":\"EzooDownload\"}}", "x".repeat(8192));
+        assert!(!is_existing_ping(&oversized));
+    }
 
     fn ready(browser: &str, origin: &str) -> ExtensionReadyRequest {
         ExtensionReadyRequest { browser: browser.into(), version: "1.0.6.1".into(), extension_origin: origin.into(), enabled: true }

@@ -59,9 +59,11 @@ fn fill(ui: &Ui, d: &SettingsDialog, s: &Settings) {
     d.set_bg_strength(s.background_strength.clamp(10, 80) as f32);
     d.set_start_with_windows(autostart::is_enabled());
     if cfg!(target_os = "macos") {
-        d.set_startup_label(t("Launch Mac Downloader when I sign in").into());
+        d.set_startup_label(t("Launch Mac Downloader in the background when I sign in").into());
+        d.set_background_label(t("Keep running in the menu bar when the window is closed").into());
     }
     d.set_windows_features(cfg!(windows));
+    d.set_background_supported(cfg!(any(windows, target_os = "macos")));
     d.set_close_to_tray(s.close_to_tray);
     d.set_clipboard(s.clipboard_monitor);
     d.set_auto_clipboard(s.auto_start_clipboard);

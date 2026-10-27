@@ -1829,6 +1829,8 @@ export component SettingsDialog inherits ThemedWindow {
     callback preview-look();
     in property <string> startup-label: @tr("Launch Mac Downloader on Windows startup");
     in property <bool> windows-features: true;
+    in property <bool> background-supported: false;
+    in property <string> background-label: @tr("Keep running next to the clock when the window is closed");
     in-out property <bool> start-with-windows;
     in-out property <bool> close-to-tray;
     in-out property <bool> clipboard;
@@ -2099,8 +2101,8 @@ export component SettingsDialog inherits ThemedWindow {
                         checked <=> root.start-with-windows;
                     }
                     CheckBox {
-                        text: @tr("Keep running next to the clock when the window is closed");
-                        enabled: root.windows-features;
+                        text: root.background-label;
+                        enabled: root.background-supported;
                         checked <=> root.close-to-tray;
                     }
                     CheckBox {

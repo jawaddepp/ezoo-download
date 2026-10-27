@@ -2119,9 +2119,9 @@ export component DetailsDialog inherits ThemedWindow {
     always-on-top: root.front;
     title: @tr("Download");
     preferred-width: 560px;
-    preferred-height: (root.show-details ? 560px : root.error != "" ? 308px : 252px) * Theme.font-scale;
+    preferred-height: (root.show-details ? 560px : root.error != "" ? 276px : 220px) * Theme.font-scale;
     min-width: 480px * Theme.font-scale;
-    min-height: (root.show-details ? 420px : root.error != "" ? 308px : 252px) * Theme.font-scale;
+    min-height: (root.show-details ? 420px : root.error != "" ? 276px : 220px) * Theme.font-scale;
     // macOS supplies a native title bar and resize handles.
     in property <bool> native-frame: false;
     no-frame: !root.native-frame;

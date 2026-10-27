@@ -51,18 +51,24 @@ mod imp {
     }
 
     fn plist(executable: &Path) -> String {
+        managed_plist(executable, true)
+    }
+
+    // Keep the previous exact rendering for migration, so an existing opt-in
+    // can become quiet at sign-in without taking ownership of custom agents.
+    fn managed_plist(executable: &Path, background: bool) -> String {
         let escaped = executable.to_string_lossy()
             .replace('&', "&amp;")
             .replace('<', "&lt;")
             .replace('>', "&gt;")
             .replace('\"', "&quot;")
             .replace('\'', "&apos;");
-        // No --background: macOS currently has no tray icon to reopen a hidden window.
+        let background_arg = if background { "<string>--background</string>" } else { "" };
         format!(r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>{LABEL}</string>
-<key>ProgramArguments</key><array><string>{escaped}</string></array>
+<key>ProgramArguments</key><array><string>{escaped}</string>{background_arg}</array>
 <key>RunAtLoad</key><true/>
 <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict></plist>
@@ -77,7 +83,7 @@ mod imp {
         false
     }
 
-    // Only replace a plist written by the old app at the sibling location.
+    // Only replace exact managed plists at the current or old sibling path.
     // Never create a LaunchAgent or overwrite a user-customized one.
     fn refresh_at(path: &Path, executable: &Path) -> bool {
         let Some(macos) = executable.parent() else { return false };
@@ -91,11 +97,19 @@ mod imp {
         }
         let Some(app_dir) = bundle.parent() else { return false };
         let old_executable = app_dir.join("Ezoo Download.app/Contents/MacOS/EzooDownload");
-        if std::fs::read_to_string(path).ok().as_deref() != Some(plist(&old_executable).as_str()) {
+        let Ok(current) = std::fs::read_to_string(path) else { return false };
+        let replacement = plist(executable);
+        if current == replacement {
+            return false;
+        }
+        let managed = current == managed_plist(executable, false)
+            || current == managed_plist(&old_executable, false)
+            || current == managed_plist(&old_executable, true);
+        if !managed {
             return false;
         }
         let staged = path.with_extension(format!("{}.tmp", std::process::id()));
-        let result = std::fs::write(&staged, plist(executable)).and_then(|_| std::fs::rename(&staged, path));
+        let result = std::fs::write(&staged, replacement).and_then(|_| std::fs::rename(&staged, path));
         if result.is_err() { let _ = std::fs::remove_file(staged); }
         result.is_ok()
     }
@@ -128,7 +142,7 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::{plist, refresh_at};
+        use super::{managed_plist, plist, refresh_at};
         use std::path::Path;
 
         #[test]
@@ -140,22 +154,31 @@ mod imp {
             let new = dir.join("Mac Downloader.app/Contents/MacOS/MacDownloader");
             assert!(!refresh_at(&agent, &new));
             assert!(!agent.exists());
-            std::fs::write(&agent, plist(&old)).unwrap();
-            assert!(refresh_at(&agent, &new));
-            assert_eq!(std::fs::read_to_string(&agent).unwrap(), plist(&new));
-            assert!(!refresh_at(&agent, &new));
-            std::fs::write(&agent, "custom agent").unwrap();
-            assert!(!refresh_at(&agent, &new));
-            assert_eq!(std::fs::read_to_string(&agent).unwrap(), "custom agent");
+            for legacy in [managed_plist(&old, false), managed_plist(&new, false), managed_plist(&old, true)] {
+                std::fs::write(&agent, legacy).unwrap();
+                assert!(refresh_at(&agent, &new));
+                assert_eq!(std::fs::read_to_string(&agent).unwrap(), plist(&new));
+                assert!(!refresh_at(&agent, &new));
+            }
+            for custom in ["custom agent".to_owned(), managed_plist(&new, false).replace("<key>RunAtLoad</key><true/>", "<key>RunAtLoad</key><false/>") ] {
+                std::fs::write(&agent, &custom).unwrap();
+                assert!(!refresh_at(&agent, &new));
+                assert_eq!(std::fs::read_to_string(&agent).unwrap(), custom);
+            }
+            std::fs::write(&agent, managed_plist(&old, false)).unwrap();
+            let other = dir.join("Other.app/Contents/MacOS/MacDownloader");
+            assert!(!refresh_at(&agent, &other));
+            assert_eq!(std::fs::read_to_string(&agent).unwrap(), managed_plist(&old, false));
             std::fs::remove_dir_all(dir).unwrap();
         }
 
         #[test]
-        fn launch_agent_escapes_paths_and_starts_a_visible_window() {
+        fn launch_agent_escapes_paths_and_starts_quietly_without_respawning_after_quit() {
             let value = plist(Path::new("/Applications/Ezoo & <Friends> \"quoted\".app/Contents/MacOS/EzooDownload"));
             assert!(value.contains("Ezoo &amp; &lt;Friends&gt; &quot;quoted&quot;.app"));
             assert!(value.contains("<key>RunAtLoad</key><true/>"));
-            assert!(!value.contains("--background"));
+            assert!(value.contains("<string>--background</string>"));
+            assert!(!value.contains("KeepAlive"));
         }
     }
 }
