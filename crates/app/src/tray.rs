@@ -281,6 +281,10 @@ mod imp {
         // Defer Slint changes until AppKit has finished tracking the menu. No
         // polling or shared native menu event handler is needed for these actions.
         let _ = slint::invoke_from_event_loop(move || {
+            if crate::modal_open() {
+                PENDING.with(|p| p.borrow_mut().push(action));
+                return;
+            }
             let handler = HANDLER.with(|h| h.borrow().clone());
             if let Some(handler) = handler {
                 handler(action);
